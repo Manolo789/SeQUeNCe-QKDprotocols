@@ -12,11 +12,6 @@ from sequence.topology.node import QKDNode
 import sequence.utils.log as log
 import numpy as np
 
-##
-#Lembrar de importar o arquivo BB84.py na pasta do jupiter notebook#
-##
-
-
 
 def binary_entropy(Q):
     if Q == 0 or Q == 1:
@@ -141,3 +136,4 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
