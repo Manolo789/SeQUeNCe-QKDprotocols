@@ -63,12 +63,12 @@ from ..kernel.process import Process
 from ..utils import log
 
 
-def pair_bb84_protocols(sender: "BB84", receiver: "BB84") -> None:
-    """Function to pair BB84 protocol instances.
+def pair_b92_protocols(sender: "B92", receiver: "B92") -> None:
+    """Function to pair B92 protocol instances.
 
     Args:
-        sender (BB84): protocol instance sending qubits (Alice).
-        receiver (BB84): protocol instance receiving qubits (Bob).
+        sender (B92): protocol instance sending qubits (Alice).
+        receiver (B92): protocol instance receiving qubits (Bob).
     """
 
     sender.another = receiver
@@ -77,8 +77,8 @@ def pair_bb84_protocols(sender: "BB84", receiver: "BB84") -> None:
     receiver.role = 1
 
 
-class BB84MsgType(Enum):
-    """Defines possible message types for BB84."""
+class B92MsgType(Enum):
+    """Defines possible message types for B92."""
 
     BEGIN_PHOTON_PULSE = auto()
     RECEIVED_QUBITS = auto()
@@ -86,14 +86,14 @@ class BB84MsgType(Enum):
     MATCHING_INDICES = auto()
 
 
-class BB84Message(Message):
-    """Message used by BB84 protocols.
+class B92Message(Message):
+    """Message used by B92 protocols.
 
-    This message contains all information passed between BB84 protocol instances.
+    This message contains all information passed between B92 protocol instances.
     Messages of different types contain different information.
 
     Attributes:
-        msg_type (BB84MsgType): defines the message type.
+        msg_type (B92MsgType): defines the message type.
         receiver (str): name of destination protocol instance.
         frequency (float): frequency for qubit generation (if `msg_type == BEGIN_PHOTON_PULSE`).
         light_time (float): lenght of time to send qubits (if `msg_type == BEGIN_PHOTON_PULSE`).
@@ -103,28 +103,28 @@ class BB84Message(Message):
         indices (list[int]): list of indices for matching bases (if `msg_type == MATCHING_INDICES`).
     """
 
-    def __init__(self, msg_type: BB84MsgType, receiver: str, **kwargs):
+    def __init__(self, msg_type: B92MsgType, receiver: str, **kwargs):
         Message.__init__(self, msg_type, receiver)
-        self.protocol_type = BB84
-        if self.msg_type is BB84MsgType.BEGIN_PHOTON_PULSE:
+        self.protocol_type = B92
+        if self.msg_type is B92MsgType.BEGIN_PHOTON_PULSE:
             self.frequency = kwargs["frequency"]
             self.light_time = kwargs["light_time"]
             self.start_time = kwargs["start_time"]
             self.wavelength = kwargs["wavelength"]
-        elif self.msg_type is BB84MsgType.RECEIVED_QUBITS:
+        elif self.msg_type is B92MsgType.RECEIVED_QUBITS:
             pass
-        elif self.msg_type is BB84MsgType.BASIS_LIST:
+        elif self.msg_type is B92MsgType.BASIS_LIST:
             self.bases = kwargs["bases"]
-        elif self.msg_type is BB84MsgType.MATCHING_INDICES:
+        elif self.msg_type is B92MsgType.MATCHING_INDICES:
             self.indices = kwargs["indices"]
         else:
-            raise Exception(f"BB84 generated invalid message type {msg_type}")
+            raise Exception(f"B92 generated invalid message type {msg_type}")
 
 
-class BB84(StackProtocol):
-    """Implementation of BB84 protocol.
+class B92(StackProtocol):
+    """Implementation of B92 protocol.
 
-    The BB84 protocol uses photons to create a secure key between two QKD Nodes.
+    The B92 protocol uses photons to create a secure key between two QKD Nodes.
 
     Attributes:
         owner (QKDNode): node that protocol instance is attached to.
@@ -135,18 +135,20 @@ class BB84(StackProtocol):
         light_time (float): time to use laser (in s).
         start_time (int): simulation start time of key generation.
         photon_delay (int): time delay of photon (ps).
-        basis_lists (list[int]): list of bases that qubits are sent in.
+        
+        cancelled basis_lists (list[int]): list of bases that qubits are sent in.
+        
         bit_lists (list[int]): list of 0/1 qubits sent (in bases from basis_lists).
         key (int): generated key as an integer.
         key_bits (list[int]): generated key as a list of 0/1 bits.
-        another (BB84): other BB84 protocol instance (on opposite node).
+        another (B92): other B92 protocol instance (on opposite node).
         key_lengths (list[int]): list of desired key lengths.
         self.keys_left_list (list[int]): list of desired number of keys.
         self.end_run_times (list[int]): simulation time for end of each request.
     """
 
     def __init__(self, owner: "QKDNode", name: str, lightsource: str, qsdetector: str, role=-1):
-        """Constructor for BB84 class.
+        """Constructor for B92 class.
 
         Args:
             owner (QKDNode): node hosting protocol instance.
@@ -183,7 +185,7 @@ class BB84(StackProtocol):
         # metrics
         self.latency = 0  # measured in seconds
         self.last_key_time = 0
-        self.sifted_bits_length = [] ### Editado
+        self.sifted_bits_length = []
         self.throughputs = []  # measured in bits/sec
         self.error_rates = []
 
@@ -257,7 +259,7 @@ class BB84(StackProtocol):
 
             # send message that photon pulse is beginning, then send bits
             self.start_time = int(self.owner.timeline.now()) + round(self.owner.cchannels[self.another.owner.name].delay)
-            message = BB84Message(BB84MsgType.BEGIN_PHOTON_PULSE, self.another.name,
+            message = B92Message(B92MsgType.BEGIN_PHOTON_PULSE, self.another.name,
                                   frequency=self.ls_freq, light_time=self.light_time,
                                   start_time=self.start_time, wavelength=ls.wavelength)
             self.owner.send_message(self.another.owner.name, message)
@@ -287,9 +289,9 @@ class BB84(StackProtocol):
         if self.working and self.owner.timeline.now() < self.end_run_times[0]:
             self.owner.destination = self.another.owner.name
 
-            # generate basis/bit list
+            # generate bit list
             num_pulses = round(self.light_time * self.ls_freq)
-            basis_list = numpy.random.choice([0, 1], num_pulses)
+            # basis_list = numpy.random.choice([0, 1], num_pulses)
             bit_list = numpy.random.choice([0, 1], num_pulses)
 
             # control hardware
@@ -297,11 +299,12 @@ class BB84(StackProtocol):
             encoding_type = lightsource.encoding_type
             state_list = []
             for i, bit in enumerate(bit_list):
-                state = (encoding_type["bases"][basis_list[i]])[bit]
+                #state = (encoding_type["bases"][basis_list[i]])[bit]
+                state = (encoding_type["bases"][bit])[bit]
                 state_list.append(state)
             lightsource.emit(state_list)
 
-            self.basis_lists.append(basis_list)
+            self.basis_lists.append(bit_list)
             self.bit_lists.append(bit_list)
 
             # schedule another
@@ -356,7 +359,7 @@ class BB84(StackProtocol):
                 self.owner.timeline.schedule(event)
 
             # send message that we got photons
-            message = BB84Message(BB84MsgType.RECEIVED_QUBITS, self.another.name)
+            message = B92Message(B92MsgType.RECEIVED_QUBITS, self.another.name)
             self.owner.send_message(self.another.owner.name, message)
 
     def received_message(self, src: str, msg: "Message") -> None:
@@ -370,7 +373,7 @@ class BB84(StackProtocol):
         """
 
         if self.working and self.owner.timeline.now() < self.end_run_times[0]:
-            if msg.msg_type is BB84MsgType.BEGIN_PHOTON_PULSE:  # (current node is Bob): start to receive photons
+            if msg.msg_type is B92MsgType.BEGIN_PHOTON_PULSE:  # (current node is Bob): start to receive photons
                 self.ls_freq = msg.frequency
                 self.light_time = msg.light_time
 
@@ -386,13 +389,13 @@ class BB84(StackProtocol):
                 event = Event(self.start_time + round(self.light_time * 1e12) - 1, process)
                 self.owner.timeline.schedule(event)
 
-            elif msg.msg_type is BB84MsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send basis
+            elif msg.msg_type is B92MsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send basis
                 log.logger.debug(self.name + " received RECEIVED_QUBITS message")
                 bases = self.basis_lists.pop(0)
-                message = BB84Message(BB84MsgType.BASIS_LIST, self.another.name, bases=bases)
+                message = B92Message(B92MsgType.BASIS_LIST, self.another.name, bases=bases)
                 self.owner.send_message(self.another.owner.name, message)
 
-            elif msg.msg_type is BB84MsgType.BASIS_LIST:  # (Current node is Bob): compare bases
+            elif msg.msg_type is B92MsgType.BASIS_LIST:  # (Current node is Bob): compare bases
                 log.logger.debug(self.name + " received BASIS_LIST message")
                 # parse alice basis list
                 basis_list_alice = msg.bases
@@ -407,10 +410,10 @@ class BB84(StackProtocol):
                         self.key_bits.append(bits[i])
 
                 # send to Alice list of matching indices
-                message = BB84Message(BB84MsgType.MATCHING_INDICES, self.another.name, indices=indices)
+                message = B92Message(B92MsgType.MATCHING_INDICES, self.another.name, indices=indices)
                 self.owner.send_message(self.another.owner.name, message)
 
-            elif msg.msg_type is BB84MsgType.MATCHING_INDICES:  # (Current node is Alice): create key from matching indices
+            elif msg.msg_type is B92MsgType.MATCHING_INDICES:  # (Current node is Alice): create key from matching indices
                 log.logger.debug(self.name + " received MATCHING_INDICES message")
                 # parse matching indices
                 indices = msg.indices
