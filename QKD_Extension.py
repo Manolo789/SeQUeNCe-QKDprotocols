@@ -85,16 +85,29 @@ def simulation_BB84(runtime=20, log_filename=-1, distance=1e3, polarization_fide
     
     return QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS
 
+def simulation_B92():
+    pass
 
-def plot_graph():
-    # Gráfico Taxa de chave secreta em função da distância
+def simulation_COW():
+    pass
+
+# plot_graph (
+#            d_step = step of the distance (in meters),
+#            d_lim = limit distance (in meters)
+#            att_lim = attenuation limit (in dB/meters)
+#            keysize = key size (in number of logical bits)):
+def plot_graph(d_step, d_lim, att_lim, keysize):
+    # Gráfico Taxa de chave secreta e da taxa de erros (QBER) em função da distância
+
+    # skr = [BB84_skr_list, B92_skr_list, COW_skr_list]
+    # qber = [BB84_qber_list, B92_qber_list, COW_qber_list]
+    skr = []
+    qber = []
     d_list = []
+
+
     skr_list = []
     qber_list = []
-    d_step = 100
-    d_lim = 10000 # Em metros
-    att_lim = 0.0002 # dB/metro
-    keysize = 25
     d = 0
     while d <= d_lim:
         QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_BB84(distance=d, attenuation=att_lim, keysize=keysize)
@@ -104,23 +117,57 @@ def plot_graph():
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
-        
-    skr_array = np.log10(np.array(skr_list))
+    skr[0].append(skr_list)
+    qber[0].append(qber_list)
+
+    skr_list.clear()
+    qber_list.clear()
+    d = 0
+    while d <= d_lim:
+        QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_B92(distance=d, attenuation=att_lim, keysize=keysize)
+        skr_list.append(SECRET_KEY_RATE)
+        qber_list.append(np.mean(QBER))
+        print()
+        print(str((d/d_lim)*100)+'% concluído')
+        d += d_step
+    skr[1].append(skr_list)
+    qber[1].append(qber_list)
+
+    skr_list.clear()
+    qber_list.clear()
+    d = 0
+    while d <= d_lim:
+        QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_COW(distance=d, attenuation=att_lim, keysize=keysize)
+        skr_list.append(SECRET_KEY_RATE)
+        qber_list.append(np.mean(QBER))
+        print()
+        print(str((d/d_lim)*100)+'% concluído')
+        d += d_step
+    skr[2].append(skr_list)
+    qber[2].append(qber_list)
+
+    
+    # Convert skr, qber and d_list in numpy array
+    skr_array = np.log10(np.array(skr))
     d_array = np.array(d_list)
-    qber_array= np.array(qber_list)
+    qber_array= np.array(qber)
     
     # display our collected metrics
     fig, ax1 = plt.subplots()
-    linha_y, = ax1.plot(d_array, skr_array, linestyle='-', color='blue', label="R_sk(d)")
+    linha_y1, = ax1.plot(d_array, skr_array[0], linestyle='-', color='blue', label="R_sk(d) of the BB84")
+    linha_y2, = ax1.plot(d_array, skr_array[1], linestyle='-', color='red', label="R_sk(d) of the B92")
+    linha_y3, = ax1.plot(d_array, skr_array[2], linestyle='-', color='green', label="R_sk(d) of the COW")
     ax1.set_xlabel("Distance (d) [m]")
     ax1.set_ylabel("Log_10 Secret Key Rate (R_sk) [bits per sent qubit]")
     ax1.set_title("Attenuation [dB/m]:"+str(att_lim)+", Keysize [bits of width]:"+str(keysize))
 
     ax2 = ax1.twinx()
-    linha_z, = ax2.plot(d_array, qber_array, linestyle='--', color='red', label="QBER(d)")
+    linha_z1, = ax2.plot(d_array, qber_array[0], linestyle='--', color='orange', label="QBER(d) of the BB84")
+    linha_z2, = ax2.plot(d_array, qber_array[1], linestyle='--', color='yellow', label="QBER(d) of the B92")
+    linha_z3, = ax2.plot(d_array, qber_array[2], linestyle='--', color='black', label="QBER(d) of the COW")
     ax2.set_ylabel("QBER")
 
-    linhas = [linha_y, linha_z]
+    linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3]
     labels = [l.get_label() for l in linhas]
     ax1.legend(linhas, labels, loc="best")
 
@@ -132,8 +179,9 @@ def run_simulation():
     #log_filename = "bb84.log"
     #interactive_plot = interact(simulation_BB84, runtime=(1, 10, 20), attenuation=(0.0002, 0.002, 0.02), keysize=[128, 256, 512])
     #interactive_plot
-    plot_graph()
+    plot_graph(100, 10000, 0.0002, 25)
 
 if __name__ == "__main__":
     run_simulation()
+
 
