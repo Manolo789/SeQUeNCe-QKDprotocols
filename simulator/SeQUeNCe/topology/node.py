@@ -28,6 +28,7 @@ from ..components.bsm import SingleAtomBSM, SingleHeraldedBSM
 from ..components.light_source import LightSource
 from ..components.detector import QSDetector, QSDetectorPolarization, QSDetectorTimeBin
 from ..qkd.BB84 import BB84
+from ..qkd.B92 import B92
 from ..qkd.cascade import Cascade
 from ..entanglement_management.generation import EntanglementGenerationB
 from ..resource_management.resource_manager import ResourceManager
@@ -481,7 +482,7 @@ class QKDNode(Node):
     3. Privacy Amplification  <= No implementation
     2. Entropy Estimation <= No implementation
     1. Error Correction <= implemented by cascade
-    0. Sifting <= implemented by BB84
+    0. Sifting <= implemented by BB84, B92 and COW
 
     Additionally, the `components` dictionary contains the following hardware:
 
@@ -497,7 +498,7 @@ class QKDNode(Node):
     """
 
     def __init__(self, name: str, timeline: "Timeline", encoding=polarization, stack_size=5,
-                 seed=None, component_templates=None):
+                 qkdtype=0, seed=None, component_templates=None):
         """Constructor for the qkd node class.
 
         Args:
@@ -505,6 +506,7 @@ class QKDNode(Node):
             timeline (Timeline): simulation timeline.
             encoding (dict[str, Any]): encoding scheme for qubits (from encoding module) (default polarization).
             stack_size (int): number of qkd protocols to include in the protocol stack (default 5).
+            qkdtype (int): 0 (BB84 QKD protocol), 1 (B92 QKD protocol), 2 (COW QKD protocol)
         """
 
         super().__init__(name, timeline, seed)
@@ -537,9 +539,19 @@ class QKDNode(Node):
         self.protocol_stack = [None] * 5
 
         if stack_size > 0:
-            # Create BB84 protocol
-            self.protocol_stack[0] = BB84(self, name + ".BB84", ls_name, qsd_name)
-            self.protocols.append(self.protocol_stack[0])
+            if qkdtype == 0:
+                # Create BB84 protocol
+                self.protocol_stack[0] = BB84(self, name + ".BB84", ls_name, qsd_name)
+                self.protocols.append(self.protocol_stack[0])
+            elif qkdtype == 1:
+                # Create B92 protocol
+                self.protocol_stack[0] = B92(self, name + ".B92", ls_name, qsd_name)
+                self.protocols.append(self.protocol_stack[0])
+#            elif qkdtype == 2:
+#                # Create COW protocol
+#                self.protocol_stack[0] = COW(self, name + ".COW", ls_name, qsd_name)
+#                self.protocols.append(self.protocol_stack[0])
+
         if stack_size > 1:
             # Create cascade protocol
             self.protocol_stack[1] = Cascade(self, name + ".cascade")
