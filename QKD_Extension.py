@@ -182,8 +182,8 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
-    skr[0].append(skr_list)
-    qber[0].append(qber_list)
+    skr.append(skr_list)
+    qber.append(qber_list)
 
     skr_list.clear()
     qber_list.clear()
@@ -195,9 +195,9 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
-    skr[1].append(skr_list)
-    qber[1].append(qber_list)
-'''
+    skr.append(skr_list)
+    qber.append(qber_list)
+    '''
     skr_list.clear()
     qber_list.clear()
     d = 0
@@ -208,9 +208,9 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
-    skr[2].append(skr_list)
-    qber[2].append(qber_list)
-'''
+    skr.append(skr_list)
+    qber.append(qber_list)
+    '''
     
     # Convert skr, qber and d_list in numpy array
     skr_array = np.log10(np.array(skr))
@@ -249,6 +249,7 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
 
 
 
