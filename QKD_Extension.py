@@ -12,6 +12,7 @@ from sequence.qkd.B92 import pair_b92_protocols
 from sequence.topology.node import QKDNode
 import sequence.utils.log as log
 import numpy as np
+import pandas as pd
 
 
 def binary_entropy(Q):
@@ -211,11 +212,15 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     skr.append(skr_list)
     qber.append(qber_list)
     '''
-    
+
     # Convert skr, qber and d_list in numpy array
     skr_array = np.log10(np.array(skr))
     d_array = np.array(d_list)
     qber_array= np.array(qber)
+
+    log = {'R_sk - BB84': skr_array[0], "QBER - BB84": qber_array[0], 'R_sk - B92': skr_array[1], "QBER - B92": qber_array[1], 'distance': d_array}
+    df = pd.DataFrame(log)
+    df.to_csv('metrics.csv')
     
     # display our collected metrics
     fig, ax1 = plt.subplots()
@@ -249,6 +254,7 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
 
 
 
