@@ -291,7 +291,6 @@ class B92(StackProtocol):
 
             # generate bit list
             num_pulses = round(self.light_time * self.ls_freq)
-            # basis_list = numpy.random.choice([0, 1], num_pulses)
             bit_list = numpy.random.choice([0, 1], num_pulses)
 
             # control hardware
@@ -299,7 +298,6 @@ class B92(StackProtocol):
             encoding_type = lightsource.encoding_type
             state_list = []
             for i, bit in enumerate(bit_list):
-                #state = (encoding_type["bases"][basis_list[i]])[bit]
                 state = (encoding_type["bases"][bit])[bit]
                 state_list.append(state)
             lightsource.emit(state_list)
@@ -405,7 +403,7 @@ class B92(StackProtocol):
                 basis_list = self.basis_lists.pop(0)
                 bits = self.bit_lists.pop(0)
                 for i, b in enumerate(basis_list_alice):
-                    if bits[i] != -1 and basis_list[i] == b:
+                    if bits[i] != -1 and basis_list[i] == bits[i]:
                         indices.append(i)
                         self.key_bits.append(bits[i])
 
