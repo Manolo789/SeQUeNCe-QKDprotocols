@@ -172,8 +172,10 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     d_list = []
 
 
-    skr_list = []
-    qber_list = []
+    skr_list_bb84 = []
+    qber_list_bb84 = []
+    skr_list_b92 = []
+    qber_list_b92 = []
     d = 0
     while d <= d_lim:
         QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_BB84(distance=d, attenuation=att_lim, keysize=keysize)
@@ -183,11 +185,9 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
-    skr.append(skr_list)
-    qber.append(qber_list)
+    skr.append(skr_list_bb84)
+    qber.append(qber_list_bb84)
 
-    skr_list.clear()
-    qber_list.clear()
     d = 0
     while d <= d_lim:
         QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_B92(distance=d, attenuation=att_lim, keysize=keysize)
@@ -196,8 +196,8 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
-    skr.append(skr_list)
-    qber.append(qber_list)
+    skr.append(skr_list_b92)
+    qber.append(qber_list_b92)
     '''
     skr_list.clear()
     qber_list.clear()
@@ -254,6 +254,7 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
 
 
 
