@@ -180,8 +180,8 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     while d <= d_lim:
         QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_BB84(distance=d, attenuation=att_lim, keysize=keysize)
         d_list.append(d)
-        skr_list.append(SECRET_KEY_RATE)
-        qber_list.append(np.mean(QBER))
+        skr_list_bb84.append(SECRET_KEY_RATE)
+        qber_list_bb84.append(np.mean(QBER))
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
@@ -191,8 +191,8 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     d = 0
     while d <= d_lim:
         QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS = simulation_B92(distance=d, attenuation=att_lim, keysize=keysize)
-        skr_list.append(SECRET_KEY_RATE)
-        qber_list.append(np.mean(QBER))
+        skr_list_b92.append(SECRET_KEY_RATE)
+        qber_list_b92.append(np.mean(QBER))
         print()
         print(str((d/d_lim)*100)+'% concluído')
         d += d_step
@@ -254,6 +254,7 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
 
 
 
