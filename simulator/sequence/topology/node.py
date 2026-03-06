@@ -29,6 +29,7 @@ from ..components.light_source import LightSource
 from ..components.detector import QSDetector, QSDetectorPolarization, QSDetectorTimeBin
 from ..qkd.BB84 import BB84
 from ..qkd.B92 import B92
+from ..qkd.COW import COW
 from ..qkd.cascade import Cascade
 from ..entanglement_management.generation import EntanglementGenerationB
 from ..resource_management.resource_manager import ResourceManager
@@ -547,10 +548,10 @@ class QKDNode(Node):
                 # Create B92 protocol
                 self.protocol_stack[0] = B92(self, name + ".B92", ls_name, qsd_name)
                 self.protocols.append(self.protocol_stack[0])
-#            elif qkdtype == 2:
-#                # Create COW protocol
-#                self.protocol_stack[0] = COW(self, name + ".COW", ls_name, qsd_name)
-#                self.protocols.append(self.protocol_stack[0])
+            elif qkdtype == 2:
+                # Create COW protocol
+                self.protocol_stack[0] = COW(self, name + ".COW", ls_name, qsd_name)
+                self.protocols.append(self.protocol_stack[0])
 
         if stack_size > 1:
             # Create cascade protocol
