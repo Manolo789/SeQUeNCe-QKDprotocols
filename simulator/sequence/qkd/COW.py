@@ -76,10 +76,12 @@ def pair_cow_protocols(sender: "COW", receiver: "COW") -> None:
 class COWMsgType(Enum):
     """Defines possible message types for COW."""
 
-    BEGIN_PHOTON_PULSE = auto()
-    RECEIVED_QUBITS = auto()
-    BASIS_LIST = auto()
-    MATCHING_INDICES = auto()
+    BEGIN_PHOTON_PULSE = auto()   # Alice → Bob  : parameters of the upcoming pulse
+    RECEIVED_QUBITS = auto()   # Bob   → Alice : indices Bob detected + raw bits
+    #BASIS_LIST = auto()
+    DECOY_POSITIONS   = auto()   # Alice → Bob  : which indices were decoy sequences
+    #MATCHING_INDICES = auto()
+    SIFTED_INDICES    = auto()   # Bob   → Alice : which non-decoy indices to keep
 
 
 class COWMessage(Message):
@@ -107,11 +109,16 @@ class COWMessage(Message):
             self.light_time = kwargs["light_time"]
             self.start_time = kwargs["start_time"]
             self.wavelength = kwargs["wavelength"]
+            self.decoy_rate = kwargs.get("decoy_rate", 0.1)
         elif self.msg_type is COWMsgType.RECEIVED_QUBITS:
             pass
-        elif self.msg_type is COWMsgType.BASIS_LIST:
-            self.bases = kwargs["bases"]
-        elif self.msg_type is COWMsgType.MATCHING_INDICES:
+        #elif self.msg_type is COWMsgType.BASIS_LIST:
+        #    self.bases = kwargs["bases"]
+        elif self.msg_type is COWMsgType.DECOY_POSITIONS:
+            self.decoy_indices = kwargs["decoy_indices"]
+        #elif self.msg_type is COWMsgType.MATCHING_INDICES:
+        #    self.indices = kwargs["indices"]
+        elif self.msg_type is COWMsgType.SIFTED_INDICES:
             self.indices = kwargs["indices"]
         else:
             raise Exception(f"COW generated invalid message type {msg_type}")
@@ -163,17 +170,36 @@ class COW(StackProtocol):
         self.qsd_name = qsdetector
         self.role = role
 
+        # State flags
         self.working = False
         self.ready = True  # (for Alice) not currently processing a generate_key request
+
+        # Timing / hardware parameters
         self.light_time = 0  # time to use laser (measured in s)
         self.ls_freq = 0  # frequency of light source
         self.start_time = 0  # start time of light pulse
         self.photon_delay = 0  # time delay of photon (including dispersion) (ps)
-        self.basis_lists = None
+        self.decoy_rate   = 0.1    # fraction of symbols used as decoys
+        #self.basis_lists = None
+
+        # Alice-side buffers (populated in begin_photon_pulse)
         self.bit_lists = None
+        self.decoy_positions = None   # list[list[int]]
+
+        # Temporary buffers used during sifting (Alice side)
+        self._pending_bob_indices: List[int] = []
+        self._pending_bob_bits:    List[int] = []
+
+        # Bob-side detection buffer (populated in end_photon_pulse)
+        self.received_indices: List[int] = []
+        self.received_bits:    List[int] = []
+
+        # Key storage
         self.key = 0  # key as int
         self.key_bits = None  # key as list of bits
         self.another = None
+
+        # Request queues (mirrors BB84)
         self.key_lengths = []  # desired key lengths (from parent)
         self.keys_left_list = []
         self.end_run_times = []
