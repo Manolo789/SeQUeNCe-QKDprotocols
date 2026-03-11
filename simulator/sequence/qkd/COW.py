@@ -231,7 +231,7 @@ class COW(StackProtocol):
         if self.role != 0:
             raise AssertionError("generate key must be called from Alice")
 
-        log.logger.info(self.name + f" generating keys, keylen={length}, keynum={key_num}")
+        log.logger.info(self.name + f" generating keys [COW], keylen={length}, keynum={key_num}")
 
         self.key_lengths.append(length)
         self.another.key_lengths.append(length)
@@ -261,29 +261,38 @@ class COW(StackProtocol):
 
         if len(self.key_lengths) > 0:
             # reset buffers for self and another
-            self.basis_lists = []
-            self.another.basis_lists = []
-            self.bit_lists = []
-            self.another.bit_lists = []
-            self.key_bits = []
-            self.another.key_bits = []
-            self.latency = 0
-            self.another.latency = 0
 
-            self.working = True
+            self.bit_lists             = []
+            self.decoy_positions       = []
+            self.key_bits              = []
+            self._pending_bob_indices  = []
+            self._pending_bob_bits     = []
+
+            self.another.bit_lists         = []
+            self.another.decoy_positions   = []
+            self.another.key_bits          = []
+            self.another.received_indices  = []
+            self.another.received_bits     = []
+            
+            self.latency         = 0
+            self.another.latency = 0
+            self.working         = True
             self.another.working = True
 
             ls = self.owner.components[self.ls_name]
             self.ls_freq = ls.frequency
 
             # calculate light time based on key length
-            self.light_time = self.key_lengths[0] / (self.ls_freq * ls.mean_photon_num)
+            # COW uses 2 time slots per symbol, so the burst covers twice as many
+            # raw time-bin periods as the number of requested key bits.
+            self.light_time = (self.key_lengths[0] / (self.ls_freq * ls.mean_photon_num)) * 2
 
             # send message that photon pulse is beginning, then send bits
             self.start_time = int(self.owner.timeline.now()) + round(self.owner.cchannels[self.another.owner.name].delay)
             message = COWMessage(COWMsgType.BEGIN_PHOTON_PULSE, self.another.name,
                                   frequency=self.ls_freq, light_time=self.light_time,
-                                  start_time=self.start_time, wavelength=ls.wavelength)
+                                  start_time=self.start_time, wavelength=ls.wavelength,
+                                  decoy_rate=self.decoy_rate)
             self.owner.send_message(self.another.owner.name, message)
 
             process = Process(self, "begin_photon_pulse", [])
@@ -311,21 +320,58 @@ class COW(StackProtocol):
         if self.working and self.owner.timeline.now() < self.end_run_times[0]:
             self.owner.destination = self.another.owner.name
 
-            # generate bit list
-            num_pulses = round(self.light_time * self.ls_freq)
-            bit_list = numpy.random.choice([0, 1], num_pulses)
-
             # control hardware
             lightsource = self.owner.components[self.ls_name]
             encoding_type = lightsource.encoding_type
-            state_list = []
-            for i, bit in enumerate(bit_list):
-                state = (encoding_type["bases"][bit])[bit]
-                state_list.append(state)
-            lightsource.emit(state_list)
 
-            self.basis_lists.append(bit_list)
-            self.bit_lists.append(bit_list)
+            # Number of COW symbols in this burst
+            num_symbols = round(self.light_time * self.ls_freq / 2)
+
+            # Randomly assign data bits and flag decoy symbols
+            bit_list  = numpy.random.choice([0, 1], num_symbols)
+            is_decoy  = numpy.random.random(num_symbols) < self.decoy_rate
+            
+            decoy_pos = [int(i) for i, d in enumerate(is_decoy) if d]
+            self.bit_lists.append(bit_list.tolist())
+            self.decoy_positions.append(decoy_pos)
+
+            # Build the flat state list sent to the lightsource.
+            # In time_bin encoding:
+            #   bases[0][0] → |early⟩  (bit = 0, i.e. "early bin active")
+            #   bases[0][1] → |late⟩   (bit = 1, i.e. "late  bin active")
+            # We map:
+            #   COW bit 0  → late  pulse  → (vacuum, bases[0][1])
+            #   COW bit 1  → early pulse  → (bases[0][0], vacuum)
+            #   COW decoy  → both pulses  → (bases[0][0], bases[0][1])
+            # Vacuum is represented by the "0" state in time_bin:
+            #   bases[0][0] encodes photon in early slot,
+            #   so "no photon" at a slot means we skip emission for that slot.
+            # Because LightSource.emit() sends one photon per entry (with
+            # mean_photon_num governing actual emission probability), we use
+            # the state that directs the photon to the correct slot,
+            # and we insert None / bases[0][0] as a placeholder for vacuum.
+            # The convention adopted here follows SeQUeNCe's time_bin helper:
+            #   emit state (1, 0) → photon in early bin
+            #   emit state (0, 1) → photon in late  bin
+            early_state = encoding_type["bases"][0][0]  # |early⟩
+            late_state  = encoding_type["bases"][0][1]  # |late⟩
+
+            state_list = []
+            for i in range(num_symbols):
+                if is_decoy[i]:
+                    # Decoy: coherent pulse in both bins
+                    state_list.append(early_state)
+                    state_list.append(late_state)
+                elif bit_list[i] == 0:
+                    # Bit 0: vacuum in early, pulse in late
+                    state_list.append(early_state)   # "early" slot — vacuum encoded
+                    state_list.append(late_state)    # "late"  slot — pulse
+                else:
+                    # Bit 1: pulse in early, vacuum in late
+                    state_list.append(early_state)   # "early" slot — pulse
+                    state_list.append(late_state)    # "late"  slot — vacuum encoded
+
+            lightsource.emit(state_list)
 
             # schedule another
             self.start_time = self.owner.timeline.now()
@@ -350,14 +396,20 @@ class COW(StackProtocol):
             self.owner.timeline.schedule(event)
 
     def set_measure_basis_list(self) -> None:
-        """Method to set measurement basis list."""
+        """Configure the detector for passive (basis-free) COW detection.
 
-        log.logger.debug(self.name + " setting measurement basis")
+        In COW there is no basis reconciliation: Bob uses direct detection
+        at all times (no measurement-basis switching).  We set a uniform
+        all-zeros basis list so that the QSDetector's switch remains in
+        the direct-detection position throughout the burst.
+        """
+        # Nome a função preservado para compatibilidade na documentação
 
-        num_pulses = int(self.light_time * self.ls_freq)
-        basis_list = numpy.random.choice([0, 1], num_pulses)
-        self.basis_lists.append(basis_list)
-        self.owner.components[self.qsd_name].set_basis_list(basis_list, self.start_time, self.ls_freq)
+        log.logger.debug(self.name + " setting COW measurement (direct detection, no basis)")
+
+        num_slots = int(self.light_time * self.ls_freq)   # total time-bin slots
+        basis_list = [0] * num_slots
+        self.owner.set_basis_list(basis_list, self.start_time, self.ls_freq, self.qsd_name)
 
     def end_photon_pulse(self) -> None:
         """Method to process sent qubits."""
@@ -365,23 +417,76 @@ class COW(StackProtocol):
         log.logger.debug(self.name + " ending photon pulse")
 
         if self.working and self.owner.timeline.now() < self.end_run_times[0]:
-            # get bits
-            self.bit_lists.append(self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name))
-            self.start_time = self.owner.timeline.now()
-            # set bases for measurement
-            self.set_measure_basis_list()
+            # get_bits returns one entry per raw time-bin slot using time_bin encoding.
+            # -1 → no detection or ambiguous; 0 → early-bin detection; 1 → late-bin detection
+            raw_bits  = self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name)
+            num_symbols = len(raw_bits) // 2
 
-            # schedule another if necessary
-            if self.owner.timeline.now() + self.light_time * 1e12 - 1 < self.end_run_times[0]:
-                # schedule another
-                process = Process(self, "end_photon_pulse", [])
-                event = Event(self.start_time + int(round(self.light_time * 1e12) - 1), process)
-                self.owner.timeline.schedule(event)
+            detected_indices = []
+            detected_bits    = []
+            decoy_candidates = []   # symbols where both bins fired (likely decoys)
+
+            for i in range(num_symbols):
+                early_bin = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
+                late_bin  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1
+
+                if early_bin != -1 and late_bin == -1:
+                    # Photon in early slot only → bit 1
+                    detected_indices.append(i)
+                    detected_bits.append(1)
+                elif early_bin == -1 and late_bin != -1:
+                    # Photon in late slot only → bit 0
+                    detected_indices.append(i)
+                    detected_bits.append(0)
+                elif early_bin != -1 and late_bin != -1:
+                    # Both slots fired → candidate decoy (not added to data)
+                    decoy_candidates.append(i)
+                # else: neither → photon lost, discard
+
+            # Accumulate into the run-level buffers
+            offset = len(self.received_indices)
+            self.received_indices.extend(detected_indices)
+            self.received_bits.extend(detected_bits)
+            
+            self.start_time = self.owner.timeline.now()
 
             # send message that we got photons
-            message = COWMessage(COWMsgType.RECEIVED_QUBITS, self.another.name)
+            message = COWMessage(COWMsgType.RECEIVED_QUBITS, self.another.name, indices=detected_indices, bits=detected_bits)
             self.owner.send_message(self.another.owner.name, message)
 
+    def check_visibility(self, decoy_indices: List[int], detected_indices: List[int], detected_bits: List[int],) -> float:
+        """Estimate the monitoring-line visibility for the decoy sequences.
+
+        In the COW protocol, consecutive coherent pulses (decoy symbols)
+        should interfere constructively at Bob's monitoring detector,
+        yielding high visibility.  A reduction in visibility signals
+        eavesdropping.
+
+        This implementation uses a simplified model: visibility is
+        estimated as the ratio of decoy symbols actually detected (in
+        either time bin) to the total number of decoy symbols sent.
+        A full simulation would route decoy photons to an interferometer
+        and measure fringe contrast directly.
+
+        Args:
+            decoy_indices    (list[int]): Alice's decoy-symbol positions.
+            detected_indices (list[int]): Bob's detected-symbol positions.
+            detected_bits    (list[int]): Bob's inferred bits (unused here).
+
+        Returns:
+            float: estimated visibility ∈ [0, 1].
+                   Returns 1.0 when no decoys were sent.
+        """
+        if not decoy_indices:
+            return 1.0
+
+        decoy_set     = set(decoy_indices)
+        detected_set  = set(detected_indices)
+        detected_decoys = decoy_set & detected_set
+
+        visibility = len(detected_decoys) / len(decoy_set)
+        return visibility
+    
     def received_message(self, src: str, msg: "Message") -> None:
         """Method to receive messages.
 
@@ -396,14 +501,19 @@ class COW(StackProtocol):
             if msg.msg_type is COWMsgType.BEGIN_PHOTON_PULSE:  # (current node is Bob): start to receive photons
                 self.ls_freq = msg.frequency
                 self.light_time = msg.light_time
+                self.decoy_rate = msg.decoy_rate
 
                 log.logger.debug(self.name + f" received BEGIN_PHOTON_PULSE, ls_freq={self.ls_freq}, light_time={self.light_time}")
 
                 self.start_time = int(msg.start_time) + self.owner.qchannels[src].delay
 
-                # generate and set basis list
-                self.set_measure_basis_list()
+                # Initialise reception buffers
+                self.received_indices = []
+                self.received_bits    = []
 
+                # Set detector to direct-detection (passive, no basis switching)
+                self.set_measure_basis_list()
+        
                 # schedule end_photon_pulse()
                 process = Process(self, "end_photon_pulse", [])
                 event = Event(self.start_time + round(self.light_time * 1e12) - 1, process)
@@ -411,9 +521,16 @@ class COW(StackProtocol):
 
             elif msg.msg_type is COWMsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send basis
                 log.logger.debug(self.name + " received RECEIVED_QUBITS message")
-                bases = self.basis_lists.pop(0)
-                message = COWMessage(COWMsgType.BASIS_LIST, self.another.name, bases=bases)
+                # Buffer Bob's detections for key extraction after decoy reveal
+                self._pending_bob_indices = list(msg.indices)
+                self._pending_bob_bits    = list(msg.bits)
+
+                # Reveal which symbols were decoys
+                decoy_pos = (self.decoy_positions.pop(0) if self.decoy_positions else [])
+                message = COWMessage(COWMsgType.DECOY_POSITIONS, self.another.name, decoy_indices=decoy_pos)
                 self.owner.send_message(self.another.owner.name, message)
+
+            ###parei aqui
 
             elif msg.msg_type is COWMsgType.BASIS_LIST:  # (Current node is Bob): compare bases
                 log.logger.debug(self.name + " received BASIS_LIST message")
