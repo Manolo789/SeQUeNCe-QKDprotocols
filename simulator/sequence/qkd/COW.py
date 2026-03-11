@@ -109,7 +109,8 @@ class COWMessage(Message):
             self.wavelength = kwargs["wavelength"]
             self.decoy_rate = kwargs.get("decoy_rate", 0.1)
         elif self.msg_type is COWMsgType.RECEIVED_QUBITS:
-            pass
+            self.indices = kwargs["indices"]
+            self.bits = kwargs["bits"]
         elif self.msg_type is COWMsgType.DECOY_POSITIONS:
             self.decoy_indices = kwargs["decoy_indices"]
         elif self.msg_type is COWMsgType.SIFTED_INDICES:
@@ -119,30 +120,57 @@ class COWMessage(Message):
 
 
 class COW(StackProtocol):
-    """Implementation of COW protocol.
+    """Implementation of the COW (Coherent One-Way) QKD protocol.
 
-    The COW protocol uses photons to create a secure key between two QKD Nodes.
+    Must be used with a QKDNode that has time_bin encoding.
+    Each transmitted symbol occupies **two** consecutive time-bin slots:
+        slot 2i   → early bin
+        slot 2i+1 → late  bin
+
+    Encoding table
+    --------------
+    Bit 0  : early=vacuum, late=pulse   →  detected in late  bin → bit 0
+    Bit 1  : early=pulse,  late=vacuum  →  detected in early bin → bit 1
+    Decoy  : early=pulse,  late=pulse   →  both bins have photons
+
+    Bob's direct detector (detection_times[0]) is used to determine bits.
+    Decoy visibility is estimated from the fraction of decoy symbols where
+    Bob observes the expected double-bin coincidence.
 
     Attributes:
-        owner (QKDNode): node that protocol instance is attached to.
-        name (str): label for protocol instance.
-        role (int): determines if instance is "alice" or "bob" node.
-        working (bool): shows if protocol is currently working on a key.
-        ready (bool): used by alice to show if protocol currently processing a generate_key request.
-        light_time (float): time to use laser (in s).
-        start_time (int): simulation start time of key generation.
-        photon_delay (int): time delay of photon (ps).
-        
-        cancelled basis_lists (list[int]): list of bases that qubits are sent in.
-        
-        bit_lists (list[int]): list of 0/1 qubits sent (in bases from basis_lists).
-        key (int): generated key as an integer.
-        key_bits (list[int]): generated key as a list of 0/1 bits.
-        another (COW): other COW protocol instance (on opposite node).
-        key_lengths (list[int]): list of desired key lengths.
-        self.keys_left_list (list[int]): list of desired number of keys.
-        self.end_run_times (list[int]): simulation time for end of each request.
+        owner        (QKDNode): node that protocol instance is attached to.
+        name         (str)    : label for protocol instance.
+        role         (int)    : 0 = Alice (sender), 1 = Bob (receiver).
+        working      (bool)   : True while a key-generation run is in progress.
+        ready        (bool)   : True when Alice is idle (not processing a request).
+        light_time   (float)  : duration of one photon burst (s).
+        ls_freq      (float)  : lightsource emission frequency (Hz).
+        start_time   (int)    : simulation start time of current burst (ps).
+        photon_delay (int)    : photon propagation delay (ps).
+        decoy_rate   (float)  : probability that a symbol is a decoy (default 0.1).
+        bit_lists          (list[list[int]]): Alice's raw bit lists per burst.
+        decoy_positions    (list[list[int]]): Alice's decoy-symbol indices per burst.
+        _pending_bob_indices (list[int])    : Bob's detected indices (Alice buffer).
+        _pending_bob_bits   (list[int])    : Bob's detected bits   (Alice buffer).
+        received_indices   (list[int])    : accumulated detected indices (Bob).
+        received_bits      (list[int])    : accumulated detected bits    (Bob).
+        key              (int)            : most recently generated key (int).
+        key_bits         (list[int])      : accumulated sifted key bits.
+        another          (COW)            : partner protocol on the remote node.
+        key_lengths      (list[int])      : requested key lengths queue.
+        keys_left_list   (list[int])      : remaining keys to generate queue.
+        end_run_times    (list[int])      : deadline timestamps queue.
+        latency          (float)          : time to first key (s).
+        last_key_time    (int)            : timeline time of last key event (ps).
+        sifted_bits_length (list[int])    : length of sifted key after each run.
+        throughputs      (list[float])    : key throughput per run (bits/s).
+        error_rates      (list[float])    : QBER per run.
+        visibility       (list[float])    : monitoring-line visibility per burst.
     """
+
+    # Minimum acceptable visibility — below this threshold the protocol
+    # should abort (not enforced here; left to higher-layer logic).
+    VISIBILITY_THRESHOLD = 0.9
 
     def __init__(self, owner: "QKDNode", name: str, lightsource: str, qsdetector: str, role=-1):
         """Constructor for COW class.
@@ -203,6 +231,7 @@ class COW(StackProtocol):
         self.sifted_bits_length = []
         self.throughputs = []  # measured in bits/sec
         self.error_rates = []
+        self.visibility = [] # monitoring-line visibility
 
     def pop(self, detector_index: int, time: int) -> None:
         """Method to receive detection events (currently unused)."""
@@ -402,7 +431,7 @@ class COW(StackProtocol):
 
         num_slots = int(self.light_time * self.ls_freq)   # total time-bin slots
         basis_list = [0] * num_slots
-        self.owner.set_basis_list(basis_list, self.start_time, self.ls_freq, self.qsd_name)
+        self.owner.components[self.qsd_name].set_basis_list(basis_list, self.start_time, self.ls_freq)
 
     def end_photon_pulse(self) -> None:
         """Method to process sent qubits."""
