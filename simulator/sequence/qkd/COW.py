@@ -78,9 +78,7 @@ class COWMsgType(Enum):
 
     BEGIN_PHOTON_PULSE = auto()   # Alice → Bob  : parameters of the upcoming pulse
     RECEIVED_QUBITS = auto()   # Bob   → Alice : indices Bob detected + raw bits
-    #BASIS_LIST = auto()
     DECOY_POSITIONS   = auto()   # Alice → Bob  : which indices were decoy sequences
-    #MATCHING_INDICES = auto()
     SIFTED_INDICES    = auto()   # Bob   → Alice : which non-decoy indices to keep
 
 
@@ -112,12 +110,8 @@ class COWMessage(Message):
             self.decoy_rate = kwargs.get("decoy_rate", 0.1)
         elif self.msg_type is COWMsgType.RECEIVED_QUBITS:
             pass
-        #elif self.msg_type is COWMsgType.BASIS_LIST:
-        #    self.bases = kwargs["bases"]
         elif self.msg_type is COWMsgType.DECOY_POSITIONS:
             self.decoy_indices = kwargs["decoy_indices"]
-        #elif self.msg_type is COWMsgType.MATCHING_INDICES:
-        #    self.indices = kwargs["indices"]
         elif self.msg_type is COWMsgType.SIFTED_INDICES:
             self.indices = kwargs["indices"]
         else:
@@ -180,7 +174,6 @@ class COW(StackProtocol):
         self.start_time = 0  # start time of light pulse
         self.photon_delay = 0  # time delay of photon (including dispersion) (ps)
         self.decoy_rate   = 0.1    # fraction of symbols used as decoys
-        #self.basis_lists = None
 
         # Alice-side buffers (populated in begin_photon_pulse)
         self.bit_lists = None
