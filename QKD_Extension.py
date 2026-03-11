@@ -9,6 +9,7 @@ from sequence.kernel.process import Process
 from sequence.kernel.timeline import Timeline
 from sequence.qkd.BB84 import pair_bb84_protocols
 from sequence.qkd.B92 import pair_b92_protocols
+from sequence.qkd.COW import pair_cow_protocols
 from sequence.topology.node import QKDNode
 from sequence.utils.encoding import time_bin
 import sequence.utils.log as log
@@ -314,6 +315,7 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
 
 
 
