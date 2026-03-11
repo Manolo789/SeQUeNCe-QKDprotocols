@@ -530,44 +530,51 @@ class COW(StackProtocol):
                 message = COWMessage(COWMsgType.DECOY_POSITIONS, self.another.name, decoy_indices=decoy_pos)
                 self.owner.send_message(self.another.owner.name, message)
 
-            ###parei aqui
+            elif msg.msg_type is COWMsgType.DECOY_POSITIONS:  # (Current node is Bob): compare bases
+                log.logger.debug(self.name + " received DECOY_POSITIONS")
+                decoy_indices = msg.decoy_indices
+                decoy_set = set(decoy_indices)
 
-            elif msg.msg_type is COWMsgType.BASIS_LIST:  # (Current node is Bob): compare bases
-                log.logger.debug(self.name + " received BASIS_LIST message")
-                # parse alice basis list
-                basis_list_alice = msg.bases
+                vis = self.check_visibility(decoy_indices, self.received_indices, self.received_bits)
 
-                # compare own basis with basis message and create list of matching indices
-                indices = []
-                basis_list = self.basis_lists.pop(0)
-                bits = self.bit_lists.pop(0)
-                for i, b in enumerate(basis_list_alice):
-                    if bits[i] != -1 and basis_list[i] == bits[i]:
-                        indices.append(i)
-                        self.key_bits.append(bits[i])
+                self.visibility.append(vis)
+                log.logger.info(self.name + f" COW monitoring visibility = {vis:.4f} "f"(threshold={self.VISIBILITY_THRESHOLD})")
 
-                # send to Alice list of matching indices
-                message = COWMessage(COWMsgType.MATCHING_INDICES, self.another.name, indices=indices)
+                if vis < self.VISIBILITY_THRESHOLD:
+                log.logger.warning(self.name + " COW visibility below threshold — possible eavesdropping!")
+
+                # Sift: keep only non-decoy detected symbols
+                sifted_indices: List[int] = []
+                sifted_bits:    List[int] = []
+                for i, idx in enumerate(self.received_indices):
+                    if idx not in decoy_set:
+                        sifted_indices.append(idx)
+                        sifted_bits.append(self.received_bits[i])
+                        self.key_bits.append(self.received_bits[i])
+
+                # Send sifted (non-decoy) indices to Alice for key alignment
+                message = COWMessage(COWMsgType.SIFTED_INDICES, self.another.name, indices=sifted_indices)
                 self.owner.send_message(self.another.owner.name, message)
 
-            elif msg.msg_type is COWMsgType.MATCHING_INDICES:  # (Current node is Alice): create key from matching indices
-                log.logger.debug(self.name + " received MATCHING_INDICES message")
+            elif msg.msg_type is COWMsgType.SIFTED_INDICES:  # (Current node is Alice): create key from matching indices
+                log.logger.debug(self.name + " received SIFTED_INDICES")
                 # parse matching indices
-                indices = msg.indices
+                sifted_set = set(msg.indices)
 
-                bits = self.bit_lists.pop(0)
+                # Retrieve the bit list emitted in the most recent burst
+                bit_list = (self.bit_lists.pop(0) if self.bit_lists else [])
 
-                # set key equal to bits at received indices
-                for i in indices:
-                    self.key_bits.append(bits[i])
+                for idx in msg.indices:
+                if idx < len(bit_list):
+                    self.key_bits.append(bit_list[idx])
 
                 # check if key long enough. If it is, truncate if necessary and call cascade
                 if len(self.key_bits) >= self.key_lengths[0]:
-                    throughput = self.key_lengths[0] * 1e12 / (self.owner.timeline.now() - self.last_key_time)
+                    throughput = self.key_lengths[0] * 1e12 / max(self.owner.timeline.now() - self.last_key_time, 1)
 
                     while len(self.key_bits) >= self.key_lengths[0] and self.keys_left_list[0] > 0:
                         log.logger.info(self.name + " generated a valid key")
-                        self.sifted_bits_length.append(len(self.key_bits)) ### Editado
+                        self.sifted_bits_length.append(len(self.key_bits))
                         self.set_key()  # convert from binary list to int
                         self._pop(info=self.key)
                         self.another.set_key()
@@ -578,7 +585,8 @@ class COW(StackProtocol):
                             self.latency = (self.owner.timeline.now() - self.last_key_time) * 1e-12
 
                         self.throughputs.append(throughput)
-
+                        
+                        # Compute QBER by XOR-ing Alice's and Bob's keys
                         key_diff = self.key ^ self.another.key
                         num_errors = 0
                         while key_diff:
