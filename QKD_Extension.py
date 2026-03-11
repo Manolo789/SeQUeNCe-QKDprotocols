@@ -156,7 +156,7 @@ def simulation_B92(runtime=20, log_filename=-1, distance=1e3, polarization_fidel
     return QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS
 
 
-def simulation_COW():
+def simulation_COW(runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
     tl = Timeline(runtime*1e9)
     tl.show_progress = True
 
@@ -315,6 +315,7 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
 
 
 
