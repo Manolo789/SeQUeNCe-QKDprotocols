@@ -45,7 +45,7 @@ This code is inspired by the original code for the BB84 protocol in https://gith
 
 import math
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from ..topology.node import QKDNode
@@ -534,7 +534,7 @@ class COW(StackProtocol):
                 log.logger.info(self.name + f" COW monitoring visibility = {vis:.4f} "f"(threshold={self.VISIBILITY_THRESHOLD})")
 
                 if vis < self.VISIBILITY_THRESHOLD:
-                log.logger.warning(self.name + " COW visibility below threshold — possible eavesdropping!")
+                    log.logger.warning(self.name + " COW visibility below threshold — possible eavesdropping!")
 
                 # Sift: keep only non-decoy detected symbols
                 sifted_indices: List[int] = []
@@ -558,8 +558,8 @@ class COW(StackProtocol):
                 bit_list = (self.bit_lists.pop(0) if self.bit_lists else [])
 
                 for idx in msg.indices:
-                if idx < len(bit_list):
-                    self.key_bits.append(bit_list[idx])
+                    if idx < len(bit_list):
+                        self.key_bits.append(bit_list[idx])
 
                 # check if key long enough. If it is, truncate if necessary and call cascade
                 if len(self.key_bits) >= self.key_lengths[0]:
