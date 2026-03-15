@@ -57,6 +57,7 @@ from ..protocol import StackProtocol
 from ..kernel.event import Event
 from ..kernel.process import Process
 from ..utils import log
+from ..utils.encoding_cow import build_cow_state_list, time_bin_cow
 
 
 def pair_cow_protocols(sender: "COW", receiver: "COW") -> None:
@@ -76,28 +77,27 @@ def pair_cow_protocols(sender: "COW", receiver: "COW") -> None:
 class COWMsgType(Enum):
     """Defines possible message types for COW."""
 
-    BEGIN_PHOTON_PULSE = auto()   # Alice → Bob  : parameters of the upcoming pulse
-    RECEIVED_QUBITS = auto()   # Bob   → Alice : indices Bob detected + raw bits
+    BEGIN_PHOTON_PULSE = auto()  # Alice → Bob  : parameters of the upcoming pulse
+    RECEIVED_QUBITS = auto()     # Bob   → Alice : indices Bob detected + raw bits
     DECOY_POSITIONS   = auto()   # Alice → Bob  : which indices were decoy sequences
     SIFTED_INDICES    = auto()   # Bob   → Alice : which non-decoy indices to keep
 
 
 class COWMessage(Message):
-    """Message used by COW protocols.
-
-    This message contains all information passed between COW protocol instances.
-    Messages of different types contain different information.
+    """Classical message exchanged between Alice and Bob during COW.
 
     Attributes:
-        msg_type (COWMsgType): defines the message type.
-        receiver (str): name of destination protocol instance.
-        frequency (float): frequency for qubit generation (if `msg_type == BEGIN_PHOTON_PULSE`).
-        light_time (float): lenght of time to send qubits (if `msg_type == BEGIN_PHOTON_PULSE`).
-        start_time (int): simulation start time of qubit pulse (if `msg_type == BEGIN_PHOTON_PULSE`).
-        wavelength (float): wavelength (in nm) of photons (if `msg_type == BEGIN_PHOTON_PULSE`).
-        bases (list[int]): list of measurement bases (if `msg_type == BASIS_LIST`).
-        indices (list[int]): list of indices for matching bases (if `msg_type == MATCHING_INDICES`).
-    """
+        msg_type (COWMsgType): message type tag.
+        receiver (str): name of the destination protocol instance.
+        frequency (float): light-source clock frequency in Hz (BEGIN_PHOTON_PULSE only).
+        light_time (float): burst duration in s (BEGIN_PHOTON_PULSE only).
+        start_time (int): burst start time in ps (BEGIN_PHOTON_PULSE only).
+        wavelength (float): photon wavelength in nm (BEGIN_PHOTON_PULSE only).
+        decoy_rate (float): fraction of symbols used as decoys (BEGIN_PHOTON_PULSE only).
+        indices (list[int]): detected / sifted symbol indices (RECEIVED_QUBITS, SIFTED_INDICES).
+        bits (list[int]): raw detected bits (RECEIVED_QUBITS).
+        decoy_indices (list[int]): positions of decoy symbols (DECOY_POSITIONS).
+        """
 
     def __init__(self, msg_type: COWMsgType, receiver: str, **kwargs):
         Message.__init__(self, msg_type, receiver)
@@ -120,54 +120,38 @@ class COWMessage(Message):
 
 
 class COW(StackProtocol):
-    """Implementation of the COW (Coherent One-Way) QKD protocol.
-
-    Must be used with a QKDNode that has time_bin encoding.
-    Each transmitted symbol occupies **two** consecutive time-bin slots:
-        slot 2i   → early bin
-        slot 2i+1 → late  bin
-
-    Encoding table
-    --------------
-    Bit 0  : early=vacuum, late=pulse   →  detected in late  bin → bit 0
-    Bit 1  : early=pulse,  late=vacuum  →  detected in early bin → bit 1
-    Decoy  : early=pulse,  late=pulse   →  both bins have photons
-
-    Bob's direct detector (detection_times[0]) is used to determine bits.
-    Decoy visibility is estimated from the fraction of decoy symbols where
-    Bob observes the expected double-bin coincidence.
+    """Coherent One-Way (COW) QKD protocol.
 
     Attributes:
-        owner        (QKDNode): node that protocol instance is attached to.
-        name         (str)    : label for protocol instance.
-        role         (int)    : 0 = Alice (sender), 1 = Bob (receiver).
-        working      (bool)   : True while a key-generation run is in progress.
-        ready        (bool)   : True when Alice is idle (not processing a request).
-        light_time   (float)  : duration of one photon burst (s).
-        ls_freq      (float)  : lightsource emission frequency (Hz).
-        start_time   (int)    : simulation start time of current burst (ps).
-        photon_delay (int)    : photon propagation delay (ps).
-        decoy_rate   (float)  : probability that a symbol is a decoy (default 0.1).
-        bit_lists          (list[list[int]]): Alice's raw bit lists per burst.
-        decoy_positions    (list[list[int]]): Alice's decoy-symbol indices per burst.
-        _pending_bob_indices (list[int])    : Bob's detected indices (Alice buffer).
-        _pending_bob_bits   (list[int])    : Bob's detected bits   (Alice buffer).
-        received_indices   (list[int])    : accumulated detected indices (Bob).
-        received_bits      (list[int])    : accumulated detected bits    (Bob).
-        key              (int)            : most recently generated key (int).
-        key_bits         (list[int])      : accumulated sifted key bits.
-        another          (COW)            : partner protocol on the remote node.
-        key_lengths      (list[int])      : requested key lengths queue.
-        keys_left_list   (list[int])      : remaining keys to generate queue.
-        end_run_times    (list[int])      : deadline timestamps queue.
-        latency          (float)          : time to first key (s).
-        last_key_time    (int)            : timeline time of last key event (ps).
-        sifted_bits_length (list[int])    : length of sifted key after each run.
-        throughputs      (list[float])    : key throughput per run (bits/s).
-        error_rates      (list[float])    : QBER per run.
-        visibility       (list[float])    : monitoring-line visibility per burst.
+        owner (QKDNode): attached node.
+        name (str): protocol label.
+        role (int): 0 = Alice, 1 = Bob.
+        working (bool): True during an active key-generation run.
+        ready (bool): True when Alice is idle.
+        light_time (float): current burst duration in s.
+        ls_freq (float): light-source frequency in Hz.
+        start_time (int): burst start time in ps.
+        decoy_rate (float): fraction of symbols that are decoys.
+        bit_lists (list[list[int]]): Alice's emitted bits per burst.
+        decoy_positions (list[list[int]]): Alice's decoy positions per burst.
+        _pending_bob_indices (list[int]): Bob's detections buffered at Alice.
+        _pending_bob_bits (list[int]): Bob's raw bits buffered at Alice.
+        received_indices (list[int]): Bob's accumulated detected indices.
+        received_bits (list[int]): Bob's accumulated raw bits.
+        key (int): most recent key as integer.
+        key_bits (list[int]): accumulated sifted key bits.
+        another (COW): partner protocol.
+        key_lengths (list[int]): requested key-length queue.
+        keys_left_list (list[int]): remaining keys per request.
+        end_run_times (list[int]): deadlines per request.
+        latency (float): time to first key in s.
+        last_key_time (int): timeline time of last key event in ps.
+        sifted_bits_length (list[int]): sifted-key lengths per run.
+        throughputs (list[float]): key throughputs in bits/s.
+        error_rates (list[float]): QBERs per run.
+        visibility (list[float]): monitoring visibility per burst
+            (Michelson-based when QSDetectorCOW is used).
     """
-
     # Minimum acceptable visibility — below this threshold the protocol
     # should abort (not enforced here; left to higher-layer logic).
     VISIBILITY_THRESHOLD = 0.9
@@ -201,19 +185,20 @@ class COW(StackProtocol):
         self.ls_freq = 0  # frequency of light source
         self.start_time = 0  # start time of light pulse
         self.photon_delay = 0  # time delay of photon (including dispersion) (ps)
-        self.decoy_rate   = 0.1    # fraction of symbols used as decoys
+        self.decoy_rate = 0.1    # fraction of symbols used as decoys
+
 
         # Alice-side buffers (populated in begin_photon_pulse)
         self.bit_lists = None
-        self.decoy_positions = None   # list[list[int]]
-
-        # Temporary buffers used during sifting (Alice side)
+        self.decoy_positions = None
+        
         self._pending_bob_indices: List[int] = []
         self._pending_bob_bits:    List[int] = []
 
+
         # Bob-side detection buffer (populated in end_photon_pulse)
-        self.received_indices: List[int] = []
-        self.received_bits:    List[int] = []
+        self.received_indices = []
+        self.received_bits = []
 
         # Key storage
         self.key = 0  # key as int
@@ -229,7 +214,7 @@ class COW(StackProtocol):
         self.latency = 0  # measured in seconds
         self.last_key_time = 0
         self.sifted_bits_length = []
-        self.throughputs = []  # measured in bits/sec
+        self.throughputs = [] # measured in bits/sec
         self.error_rates = []
         self.visibility = [] # monitoring-line visibility
 
@@ -284,21 +269,21 @@ class COW(StackProtocol):
         if len(self.key_lengths) > 0:
             # reset buffers for self and another
 
-            self.bit_lists             = []
-            self.decoy_positions       = []
-            self.key_bits              = []
+            self.bit_lists = []
+            self.decoy_positions = []
+            self.key_bits = []
             self._pending_bob_indices  = []
             self._pending_bob_bits     = []
 
-            self.another.bit_lists         = []
-            self.another.decoy_positions   = []
-            self.another.key_bits          = []
-            self.another.received_indices  = []
-            self.another.received_bits     = []
-            
-            self.latency         = 0
+            self.another.bit_lists = []
+            self.another.decoy_positions = []
+            self.another.key_bits = []
+            self.another.received_indices = []
+            self.another.received_bits = []
+
+            self.latency = 0
             self.another.latency = 0
-            self.working         = True
+            self.working = True
             self.another.working = True
 
             ls = self.owner.components[self.ls_name]
@@ -347,7 +332,7 @@ class COW(StackProtocol):
             encoding_type = lightsource.encoding_type
 
             # Number of COW symbols in this burst
-            num_symbols = round(self.light_time * self.ls_freq / 2)
+            num_symbols = int(self.light_time * self.ls_freq / 2)
 
             # Randomly assign data bits and flag decoy symbols
             bit_list  = numpy.random.choice([0, 1], num_symbols)
@@ -356,43 +341,8 @@ class COW(StackProtocol):
             decoy_pos = [int(i) for i, d in enumerate(is_decoy) if d]
             self.bit_lists.append(bit_list.tolist())
             self.decoy_positions.append(decoy_pos)
-
-            # Build the flat state list sent to the lightsource.
-            # In time_bin encoding:
-            #   bases[0][0] → |early⟩  (bit = 0, i.e. "early bin active")
-            #   bases[0][1] → |late⟩   (bit = 1, i.e. "late  bin active")
-            # We map:
-            #   COW bit 0  → late  pulse  → (vacuum, bases[0][1])
-            #   COW bit 1  → early pulse  → (bases[0][0], vacuum)
-            #   COW decoy  → both pulses  → (bases[0][0], bases[0][1])
-            # Vacuum is represented by the "0" state in time_bin:
-            #   bases[0][0] encodes photon in early slot,
-            #   so "no photon" at a slot means we skip emission for that slot.
-            # Because LightSource.emit() sends one photon per entry (with
-            # mean_photon_num governing actual emission probability), we use
-            # the state that directs the photon to the correct slot,
-            # and we insert None / bases[0][0] as a placeholder for vacuum.
-            # The convention adopted here follows SeQUeNCe's time_bin helper:
-            #   emit state (1, 0) → photon in early bin
-            #   emit state (0, 1) → photon in late  bin
-            early_state = encoding_type["bases"][0][0]  # |early⟩
-            late_state  = encoding_type["bases"][0][1]  # |late⟩
-
-            state_list = []
-            for i in range(num_symbols):
-                if is_decoy[i]:
-                    # Decoy: coherent pulse in both bins
-                    state_list.append(early_state)
-                    state_list.append(late_state)
-                elif bit_list[i] == 0:
-                    # Bit 0: vacuum in early, pulse in late
-                    state_list.append(early_state)   # "early" slot — vacuum encoded
-                    state_list.append(late_state)    # "late"  slot — pulse
-                else:
-                    # Bit 1: pulse in early, vacuum in late
-                    state_list.append(early_state)   # "early" slot — pulse
-                    state_list.append(late_state)    # "late"  slot — vacuum encoded
-
+            
+            state_list = build_cow_state_list(bit_list.tolist(), is_decoy.tolist())
             lightsource.emit(state_list)
 
             # schedule another
@@ -416,22 +366,22 @@ class COW(StackProtocol):
             process = Process(self, "start_protocol", [])
             event = Event(time, process)
             self.owner.timeline.schedule(event)
+            
 
     def set_measure_basis_list(self) -> None:
-        """Configure the detector for passive (basis-free) COW detection.
+        """Configure Bob's detector for passive direct detection (COW).
 
-        In COW there is no basis reconciliation: Bob uses direct detection
-        at all times (no measurement-basis switching).  We set a uniform
-        all-zeros basis list so that the QSDetector's switch remains in
-        the direct-detection position throughout the burst.
+        COW requires no active basis switching.  All slots are detected
+        directly by the DB detector.  For :class:`QSDetectorCOW` this call
+        is a no-op; for backward-compatible ``QSDetectorTimeBin`` usage a
+        constant all-zero basis list is set.
         """
-        # Nome a função preservado para compatibilidade na documentação
-
-        log.logger.debug(self.name + " setting COW measurement (direct detection, no basis)")
-
-        num_slots = int(self.light_time * self.ls_freq)   # total time-bin slots
+        log.logger.debug(self.name + " setting COW measurement (beamsplitter model)")
+        
+        num_slots = int(self.light_time * self.ls_freq)
         basis_list = [0] * num_slots
         self.owner.components[self.qsd_name].set_basis_list(basis_list, self.start_time, self.ls_freq)
+        
 
     def end_photon_pulse(self) -> None:
         """Method to process sent qubits."""
@@ -439,75 +389,54 @@ class COW(StackProtocol):
         log.logger.debug(self.name + " ending photon pulse")
 
         if self.working and self.owner.timeline.now() < self.end_run_times[0]:
+
             # get_bits returns one entry per raw time-bin slot using time_bin encoding.
             # -1 → no detection or ambiguous; 0 → early-bin detection; 1 → late-bin detection
-            raw_bits  = self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name)
+            raw_bits = self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name)
+
             num_symbols = len(raw_bits) // 2
 
-            detected_indices = []
-            detected_bits    = []
-            decoy_candidates = []   # symbols where both bins fired (likely decoys)
+            detected_indices: List[int] = []
+            detected_bits:    List[int] = []
 
             for i in range(num_symbols):
-                early_bin = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
-                late_bin  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1
+                early = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
+                late  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1
 
-                if early_bin != -1 and late_bin == -1:
-                    # Photon in early slot only → bit 1
+                if early != -1 and late == -1:
                     detected_indices.append(i)
-                    detected_bits.append(1)
-                elif early_bin == -1 and late_bin != -1:
-                    # Photon in late slot only → bit 0
+                    detected_bits.append(1)    # early-only → bit 1
+                elif early == -1 and late != -1:
                     detected_indices.append(i)
-                    detected_bits.append(0)
-                elif early_bin != -1 and late_bin != -1:
-                    # Both slots fired → candidate decoy (not added to data)
-                    decoy_candidates.append(i)
-                # else: neither → photon lost, discard
+                    detected_bits.append(0)    # late-only  → bit 0
+                # both or neither → discard (decoy or multi-photon or loss)
 
             # Accumulate into the run-level buffers
-            offset = len(self.received_indices)
             self.received_indices.extend(detected_indices)
             self.received_bits.extend(detected_bits)
-            
+
+            # ---- Read Michelson visibility if QSDetectorCOW is available ----
+            qsd = self.owner.components[self.qsd_name]
+            if hasattr(qsd, "get_monitoring_visibility"):
+                v = qsd.get_monitoring_visibility()
+                self.visibility.append(v)
+                log.logger.info(self.name + f" [COW] Michelson visibility = {v:.4f} "+f"(threshold = {self.VISIBILITY_THRESHOLD})")
+                if v < self.VISIBILITY_THRESHOLD:
+                    log.logger.warning(self.name + " [COW] visibility below threshold — "+"possible eavesdropping or interferometer drift!")
+
             self.start_time = self.owner.timeline.now()
 
+            # schedule another if necessary
+            if self.owner.timeline.now() + self.light_time * 1e12 - 1 < self.end_run_times[0]:
+                # schedule another
+                process = Process(self, "end_photon_pulse", [])
+                event = Event(self.start_time + int(round(self.light_time * 1e12) - 1), process)
+                self.owner.timeline.schedule(event)
+            
+            
             # send message that we got photons
             message = COWMessage(COWMsgType.RECEIVED_QUBITS, self.another.name, indices=detected_indices, bits=detected_bits)
             self.owner.send_message(self.another.owner.name, message)
-
-    def check_visibility(self, decoy_indices: List[int], detected_indices: List[int], detected_bits: List[int],) -> float:
-        """Estimate the monitoring-line visibility for the decoy sequences.
-
-        In the COW protocol, consecutive coherent pulses (decoy symbols)
-        should interfere constructively at Bob's monitoring detector,
-        yielding high visibility.  A reduction in visibility signals
-        eavesdropping.
-
-        This implementation uses a simplified model: visibility is
-        estimated as the ratio of decoy symbols actually detected (in
-        either time bin) to the total number of decoy symbols sent.
-        A full simulation would route decoy photons to an interferometer
-        and measure fringe contrast directly.
-
-        Args:
-            decoy_indices    (list[int]): Alice's decoy-symbol positions.
-            detected_indices (list[int]): Bob's detected-symbol positions.
-            detected_bits    (list[int]): Bob's inferred bits (unused here).
-
-        Returns:
-            float: estimated visibility ∈ [0, 1].
-                   Returns 1.0 when no decoys were sent.
-        """
-        if not decoy_indices:
-            return 1.0
-
-        decoy_set     = set(decoy_indices)
-        detected_set  = set(detected_indices)
-        detected_decoys = decoy_set & detected_set
-
-        visibility = len(detected_decoys) / len(decoy_set)
-        return visibility
     
     def received_message(self, src: str, msg: "Message") -> None:
         """Method to receive messages.
@@ -529,13 +458,11 @@ class COW(StackProtocol):
 
                 self.start_time = int(msg.start_time) + self.owner.qchannels[src].delay
 
-                # Initialise reception buffers
                 self.received_indices = []
                 self.received_bits    = []
 
-                # Set detector to direct-detection (passive, no basis switching)
                 self.set_measure_basis_list()
-        
+
                 # schedule end_photon_pulse()
                 process = Process(self, "end_photon_pulse", [])
                 event = Event(self.start_time + round(self.light_time * 1e12) - 1, process)
@@ -543,35 +470,23 @@ class COW(StackProtocol):
 
             elif msg.msg_type is COWMsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send basis
                 log.logger.debug(self.name + " received RECEIVED_QUBITS message")
-                # Buffer Bob's detections for key extraction after decoy reveal
                 self._pending_bob_indices = list(msg.indices)
                 self._pending_bob_bits    = list(msg.bits)
 
                 # Reveal which symbols were decoys
-                decoy_pos = (self.decoy_positions.pop(0) if self.decoy_positions else [])
+                decoy_pos = self.decoy_positions.pop(0) if self.decoy_positions else []
                 message = COWMessage(COWMsgType.DECOY_POSITIONS, self.another.name, decoy_indices=decoy_pos)
                 self.owner.send_message(self.another.owner.name, message)
 
             elif msg.msg_type is COWMsgType.DECOY_POSITIONS:  # (Current node is Bob): compare bases
                 log.logger.debug(self.name + " received DECOY_POSITIONS")
-                decoy_indices = msg.decoy_indices
-                decoy_set = set(decoy_indices)
-
-                vis = self.check_visibility(decoy_indices, self.received_indices, self.received_bits)
-
-                self.visibility.append(vis)
-                log.logger.info(self.name + f" COW monitoring visibility = {vis:.4f} "f"(threshold={self.VISIBILITY_THRESHOLD})")
-
-                if vis < self.VISIBILITY_THRESHOLD:
-                    log.logger.warning(self.name + " COW visibility below threshold — possible eavesdropping!")
+                decoy_set = set(msg.decoy_indices)
 
                 # Sift: keep only non-decoy detected symbols
                 sifted_indices: List[int] = []
-                sifted_bits:    List[int] = []
                 for i, idx in enumerate(self.received_indices):
                     if idx not in decoy_set:
                         sifted_indices.append(idx)
-                        sifted_bits.append(self.received_bits[i])
                         self.key_bits.append(self.received_bits[i])
 
                 # Send sifted (non-decoy) indices to Alice for key alignment
@@ -584,7 +499,7 @@ class COW(StackProtocol):
                 sifted_set = set(msg.indices)
 
                 # Retrieve the bit list emitted in the most recent burst
-                bit_list = (self.bit_lists.pop(0) if self.bit_lists else [])
+                bit_list = self.bit_lists.pop(0) if self.bit_lists else []
 
                 for idx in msg.indices:
                     if idx < len(bit_list):
@@ -592,15 +507,15 @@ class COW(StackProtocol):
 
                 # check if key long enough. If it is, truncate if necessary and call cascade
                 if len(self.key_bits) >= self.key_lengths[0]:
+                    
                     throughput = self.key_lengths[0] * 1e12 / max(self.owner.timeline.now() - self.last_key_time, 1)
-
                     while len(self.key_bits) >= self.key_lengths[0] and self.keys_left_list[0] > 0:
                         log.logger.info(self.name + " generated a valid key")
                         self.sifted_bits_length.append(len(self.key_bits))
                         self.set_key()  # convert from binary list to int
                         self._pop(info=self.key)
                         self.another.set_key()
-                        self.another._pop(info=self.another.key)  # TODO: why access another node?
+                        self.another._pop(info=self.another.key)
 
                         # for metrics
                         if self.latency == 0:

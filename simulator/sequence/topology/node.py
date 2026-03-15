@@ -26,7 +26,10 @@ from ..kernel.entity import Entity, ClassicalEntity
 from ..components.memory import MemoryArray
 from ..components.bsm import SingleAtomBSM, SingleHeraldedBSM
 from ..components.light_source import LightSource
+from ..components.cow_light_source import COWLightSource
 from ..components.detector import QSDetector, QSDetectorPolarization, QSDetectorTimeBin
+from ..components.qsdetector_cow import QSDetectorCOW
+from ..components.circuit import Circuit
 from ..qkd.BB84 import BB84
 from ..qkd.B92 import B92
 from ..qkd.COW import COW
@@ -35,6 +38,7 @@ from ..entanglement_management.generation import EntanglementGenerationB
 from ..resource_management.resource_manager import ResourceManager
 from ..network_management.network_manager import NewNetworkManager, NetworkManager
 from ..utils.encoding import *
+from ..utils.encoding_cow import time_bin_cow, slot_period_ps
 from ..utils import log
 
 
@@ -519,10 +523,16 @@ class QKDNode(Node):
 
         # hardware setup
         ls_name = name + ".lightsource"
-        ls_args = component_templates.get("LightSource", {})
-        lightsource = LightSource(ls_name, timeline, encoding_type=encoding, **ls_args)
-        self.add_component(lightsource)
-        lightsource.add_receiver(self)
+        if encoding["name"] == "time_bin_cow":
+            ls_args = component_templates.get("COWLightSource", {})
+            lightsource = COWLightSource(ls_name, timeline, encoding_type=encoding, **ls_args)
+            self.add_component(lightsource)
+            lightsource.add_receiver(self)
+        else:
+            ls_args = component_templates.get("LightSource", {})
+            lightsource = LightSource(ls_name, timeline, encoding_type=encoding, **ls_args)
+            self.add_component(lightsource)
+            lightsource.add_receiver(self)
 
         qsd_name = name + ".qsdetector"
         if "QSDetector" in component_templates:
@@ -531,6 +541,10 @@ class QKDNode(Node):
             qsdetector = QSDetectorPolarization(qsd_name, timeline)
         elif encoding["name"] == "time_bin":
             qsdetector = QSDetectorTimeBin(qsd_name, timeline)
+        elif encoding["name"] == "time_bin_cow":
+            # Replace the generic QSDetector with QSDetectorCOW
+            path_diff = slot_period_ps(lightsource.frequency)
+            qsdetector = QSDetectorCOW(qsd_name, timeline, path_diff=path_diff, t_B=0.9)
         else:
             raise Exception("invalid encoding {} given for QKD node {}".format(encoding["name"], name))
         self.add_component(qsdetector)
@@ -622,7 +636,7 @@ class QKDNode(Node):
         # compute received bits based on encoding scheme
         encoding = self.encoding["name"]
         bits = [-1] * int(round(light_time * frequency))  # -1 used for invalid bits
-
+        
         if encoding == "polarization":
             detection_times = qsdetector.get_photon_times()
 
@@ -643,7 +657,7 @@ class QKDNode(Node):
         elif encoding == "time_bin":
             detection_times = qsdetector.get_photon_times()
             bin_separation = self.encoding["bin_separation"]
-        
+
             # single detector (for early, late basis) times
             for time in detection_times[0]:
                 index = int(round((time - start_time) * frequency * 1e-12))
@@ -676,6 +690,19 @@ class QKDNode(Node):
                         bits[index] = 1
                     else:
                         bits[index] = -1
+        
+        elif encoding == "time_bin_cow": # adequar o nome
+            detection_times = qsdetector.get_photon_times()
+            bin_sep  = time_bin_cow["bin_separation"]
+            
+            for time in detection_times[0]:
+                idx = int(round((time - start_time) * frequency * 1e-12))
+                if 0 <= idx < len(bits):
+                    dt = abs(((idx * 1e12 / frequency) + start_time) - time)
+                    if dt < bin_sep / 2:
+                        bits[idx] = 0
+                    elif abs(dt - bin_sep) < bin_sep / 2:
+                        bits[idx] = 1
 
         else:
             raise Exception(f"QKD node {self.name} has illegal encoding type {encoding}")
@@ -727,6 +754,130 @@ class QKDNode(Node):
         raise Exception(f"Message received for unknown protocol '{msg.protocol_type}' on node {self.name}")
 
     def get(self, photon: "Photon", **kwargs):
+        self.send_qubit(self.destination, photon)
+
+class EveNode(Node):
+    """Eavesdropping node that implements interception and retransmission attacks on the quantum channel.
+
+    Classic channels are NOT intercepted (authenticated model).
+
+    Attributes:
+        destination (str): Name of the next node (Bob) for retransmission.
+        intercept_rate (float): probability of intercepting each photon ∈ [0, 1].
+        encoding (dict): encoding scheme (polarization or time_bin_cow).
+        intercepted_count (int): Total count of intercepted photons.
+        forwarded_count (int): Total count of intact photons transmitted.
+        intercepted_bits (list[int]): bits inferred by Eve in each measurement.
+        intercepted_bases (list[int]): base indices chosen by Eve.
+    """
+
+    def __init__(self, name: str, timeline: "Timeline", encoding: dict = polarization, intercept_rate: float = 1.0, seed: int = 2) -> None:
+        """
+        Args:
+            name (str): label for the node instance.
+            timeline (Timeline): simulation timeline.
+            encoding (dict[str, Any]): encoding scheme for qubits (default polarization).
+            intercept_rate: Fraction of photons to be intercepted (0 = passive, 1 = full attack).
+            seed: Seed of the random number generator.
+        """
+        super().__init__(name, timeline, seed)
+        self.encoding = encoding
+        self.destination: str | None = None   # definido antes de tl.init()
+        self.intercept_rate: float = intercept_rate
+
+        # Estatísticas do ataque
+        self.intercepted_count: int = 0
+        self.forwarded_count: int = 0
+        self.intercepted_bits:  list[int] = []
+        self.intercepted_bases: list[int] = []
+
+    # ── Recepção de fótons ────────────────────────────────────────────
+
+    def receive_qubit(self, src: str, photon) -> None:
+        """Called by the Alice→Eve quantum channel upon delivering a photon.
+
+            Null photons (lost in the Alice→Eve segment) are forwarded
+            immediately so that Bob's protocol doesn't freeze waiting
+            for photons that will never arrive.
+
+        Args:
+            src:    Name of the originating node.
+            photon: Photon object received.
+        """
+        if photon.is_null:
+            # Perda ocorreu antes de Eve: propaga o fóton nulo para Bob.
+            self.send_qubit(self.destination, photon)
+            return
+
+        if self.generator.random() < self.intercept_rate:
+            self._intercept_and_resend(photon)
+        else:
+            self.forwarded_count += 1
+            self.send_qubit(self.destination, photon)
+
+    def _intercept_and_resend(self, photon) -> None:
+        """The photon is measured on a random basis and the collapsed state is relayed.
+
+        Args:
+            photon: Photon object (not null) received from Alice.
+        """
+        self.intercepted_count += 1
+
+        qm  = self.timeline.quantum_manager
+        key = photon.quantum_state[1]   # chave do estado no QuantumManager
+
+        if self.encoding["name"] == "polarization":
+            # ── BB84 / B92 ────────────────────────────────────────────
+            basis_idx = int(self.generator.integers(0, 2))   # 0=Z, 1=X
+            self.intercepted_bases.append(basis_idx)
+
+            if basis_idx == 1:
+                # Rotação para a base diagonal (X) antes da medição
+                h_pre = Circuit(1)
+                h_pre.h(0)
+                qm.run_circuit(h_pre, [key])
+
+            # Medição na base Z (padrão computacional)
+            meas = Circuit(1)
+            meas.measure(0)
+            result = qm.run_circuit(meas, [key])
+            bit = int(result.get(key, 0))
+            self.intercepted_bits.append(bit)
+
+            if basis_idx == 1:
+                # Rotação inversa: fóton fica no estado X colapsado correto.
+                # |0⟩ → |+⟩  ou  |1⟩ → |−⟩  (dependendo do resultado)
+                h_post = Circuit(1)
+                h_post.h(0)
+                qm.run_circuit(h_post, [key])
+
+        elif self.encoding["name"] == "time_bin_cow":
+            # ── COW ───────────────────────────────────────────────────
+            # Medição na base temporal (Z): destrói a coerência entre slots.
+            # Não há rotação de base — Eve apenas determina em qual slot o
+            # fóton está e retransmite nesse mesmo slot.
+            self.intercepted_bases.append(0)
+
+            meas = Circuit(1)
+            meas.measure(0)
+            result = qm.run_circuit(meas, [key])
+            bit = int(result.get(key, 0))
+            self.intercepted_bits.append(bit)
+
+        else:
+            # Codificação não suportada: encaminha sem interferência (fail-safe).
+            self.forwarded_count += 1
+            self.send_qubit(self.destination, photon)
+            return
+
+        # Retransmite o fóton (estado agora colapsado) para Bob.
+        self.send_qubit(self.destination, photon)
+
+    def get(self, photon, **kwargs) -> None:
+        """Light source receiver interface (not normally used in Eve).
+
+            Maintained for compatibility with the SeQUeNCe Node hierarchy.
+        """
         self.send_qubit(self.destination, photon)
 
 
