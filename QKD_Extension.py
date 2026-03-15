@@ -36,7 +36,7 @@ def _collect_metrics(protocol, distance: float, attenuation: float):
     return QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS
 
 
-def simulation_BB84(runtime=20, log_filename=-1, ls_params, detector_params, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
+def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
     tl = Timeline(runtime*1e9)
     tl.show_progress = True
 
@@ -86,7 +86,7 @@ def simulation_BB84(runtime=20, log_filename=-1, ls_params, detector_params, dis
 
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
-def simulation_B92(runtime=20, log_filename=-1, distance=1e3, ls_params, detector_params, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
+def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
     tl = Timeline(runtime*1e9)
     tl.show_progress = True
 
@@ -137,7 +137,7 @@ def simulation_B92(runtime=20, log_filename=-1, distance=1e3, ls_params, detecto
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
 
-def simulation_COW(runtime=20, log_filename=-1, distance=1e3, ls_params, detector_params, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
+def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
     tl = Timeline(runtime*1e9)
     tl.show_progress = True
 
@@ -190,7 +190,7 @@ def simulation_COW(runtime=20, log_filename=-1, distance=1e3, ls_params, detecto
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, VISIBILITY
     
     
-def simulation_BB84_Eve(runtime=20, log_filename=-1, distance=1e3, ls_params, detector_params, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
+def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
     dist_ae = distance * eve_position
     dist_eb = distance * (1.0 - eve_position)
 
@@ -238,7 +238,7 @@ def simulation_BB84_Eve(runtime=20, log_filename=-1, distance=1e3, ls_params, de
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
     
 
-def simulation_B92_Eve(runtime=20, log_filename=-1, distance=1e3, ls_params, detector_params, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
+def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
     dist_ae = distance * eve_position
     dist_eb = distance * (1.0 - eve_position)
 
@@ -285,7 +285,7 @@ def simulation_B92_Eve(runtime=20, log_filename=-1, distance=1e3, ls_params, det
     tl.run()
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
-def simulation_COW_Eve(runtime=20, log_filename=-1, distance=1e3, ls_params, detector_params, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
+def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
     dist_ae = distance * eve_position
     dist_eb = distance * (1.0 - eve_position)
 
