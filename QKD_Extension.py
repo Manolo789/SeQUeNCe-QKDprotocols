@@ -341,7 +341,7 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
 def plot_graph(d_step, d_lim, att_lim, keysize):
     d_list = []
 
-    ls_params = {"frequency": 3.8e+14, "wavelength":795, "mean_photon_num": 0.1}
+    ls_params = {"frequency": 8e7, "wavelength":795, "mean_photon_num": 0.1}
     detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
     detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
@@ -476,12 +476,3 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
-
-
-
-
-
-
-
-
-
