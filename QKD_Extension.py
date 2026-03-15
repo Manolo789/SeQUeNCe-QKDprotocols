@@ -216,7 +216,7 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
-    eve = EveNode("eve", tl, encoding=polarization, intercept_rate=eve_intercept_rate, seed=2)
+    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
 
     bob = QKDNode("bob", tl, stack_size=1)
     bob.set_seed(1)
@@ -264,7 +264,7 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
-    eve = EveNode("eve", tl, encoding=polarization, intercept_rate=eve_intercept_rate, seed=2)
+    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
 
     bob = QKDNode("bob", tl, stack_size=1, qkdtype=1)
     bob.set_seed(1)
