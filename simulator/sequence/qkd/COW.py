@@ -394,22 +394,23 @@ class COW(StackProtocol):
             # -1 → no detection or ambiguous; 0 → early-bin detection; 1 → late-bin detection
             raw_bits = self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name)
 
-            num_symbols = len(raw_bits) // 2
+            raw = numpy.array(raw_bits)
+            early = raw[0::2]   # slots pares
+            late  = raw[1::2]   # slots ímpares
 
-            detected_indices: List[int] = []
-            detected_bits:    List[int] = []
+            mask_bit1 = (early != -1) & (late == -1)
+            mask_bit0 = (early == -1) & (late != -1)
 
-            for i in range(num_symbols):
-                early = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
-                late  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1
+            indices_bit1 = numpy.where(mask_bit1)[0]
+            indices_bit0 = numpy.where(mask_bit0)[0]
 
-                if early != -1 and late == -1:
-                    detected_indices.append(i)
-                    detected_bits.append(1)    # early-only → bit 1
-                elif early == -1 and late != -1:
-                    detected_indices.append(i)
-                    detected_bits.append(0)    # late-only  → bit 0
-                # both or neither → discard (decoy or multi-photon or loss)
+            all_indices = numpy.concatenate([indices_bit0, indices_bit1])
+            all_bits    = numpy.concatenate([numpy.zeros(len(indices_bit0), dtype=int),
+                               numpy.ones (len(indices_bit1), dtype=int)])
+
+            order = numpy.argsort(all_indices)
+            detected_indices = all_indices[order].tolist()
+            detected_bits    = all_bits[order].tolist()
 
             # Accumulate into the run-level buffers
             self.received_indices.extend(detected_indices)
