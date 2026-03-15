@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     pass
 
-from numpy import multiply
+import numpy as np
 
 from .light_source import LightSource
 from .photon import Photon
@@ -119,26 +119,41 @@ class COWLightSource(LightSource):
         """
         time = self.timeline.now()
         period = int(round(1e12 / self.frequency))   # slot period in ps
+        rng    = self.get_generator()
 
-        for i, state in enumerate(state_list):
+        # ── Passo 1: separar slots não-vacuum ─────────────────────────────
+        # Percorremos state_list uma vez para coletar (índice_slot, estado).
+        # Esta lista tem comprimento ≈ N_símbolos (metade de len(state_list))
+        # porque metade dos slots são vacuum em média.
+        non_vacuum: list[tuple[int, object]] = [
+            (i, s) for i, s in enumerate(state_list) if s is not VACUUM_STATE
+        ]
+
+        if not non_vacuum:
+            return   # burst inteiramente vacuum — nada a emitir
+
+        n_nv = len(non_vacuum)
+
+        # ── Passo 2: draw Poisson vetorizado ──────────────────────────────
+        # Uma única chamada C gera todas as contagens.
+        # dtype int garante que a comparação counts[k] == 0 seja O(1).
+        counts: np.ndarray = rng.poisson(self.mean_photon_num, size=n_nv)
+
+        # ── Passo 3: iterar apenas sobre slots com fótons (≈10% do total) ─
+        for k in np.nonzero(counts)[0]:
+            i, state = non_vacuum[k]
             slot_time = time + i * period
+            n_photons = int(counts[k])
 
-            if state is VACUUM_STATE:
-                # Deterministic vacuum: no photon, clock still advances.
-                self.photon_counter += 0   # nothing emitted
-                continue
+            # Correção de fase opcional (aplicada por slot, não por fóton)
+            if self.phase_error > 0 and rng.random() < self.phase_error:
+                state = tuple(np.multiply([1, -1], state))
 
-            # --- weak coherent pulse ---
-            num_photons = self.get_generator().poisson(self.mean_photon_num)
-
-            # Optional phase flip
-            if self.get_generator().random() < self.phase_error:
-                state = multiply([1, -1], state)
-
-            for _ in range(num_photons):
+            for _ in range(n_photons):
                 wl = (
-                    self.linewidth * self.get_generator().standard_normal()
-                    + self.wavelength
+                    self.linewidth * rng.standard_normal() + self.wavelength
+                    if self.linewidth > 0
+                    else self.wavelength
                 )
                 photon = Photon(
                     str(i),
@@ -149,6 +164,6 @@ class COWLightSource(LightSource):
                     quantum_state=tuple(state),
                 )
                 process = Process(self._receivers[0], "get", [photon])
-                event = Event(slot_time, process)
+                event   = Event(slot_time, process)
                 self.timeline.schedule(event)
                 self.photon_counter += 1
