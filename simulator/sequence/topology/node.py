@@ -30,6 +30,7 @@ from ..components.cow_light_source import COWLightSource
 from ..components.detector import QSDetector, QSDetectorPolarization, QSDetectorTimeBin
 from ..components.qsdetector_cow import QSDetectorCOW
 from ..components.circuit import Circuit
+from ..components.photon import Photon
 from ..qkd.BB84 import BB84
 from ..qkd.B92 import B92
 from ..qkd.COW import COW
@@ -823,54 +824,77 @@ class EveNode(Node):
         """
         self.intercepted_count += 1
 
-        qm  = self.timeline.quantum_manager
-        key = photon.quantum_state[1]   # chave do estado no QuantumManager
+        if not photon.use_qm:
+            # ── FreeQuantumState path (BB84 / B92 / COW) ─────────────
+            # Photon.measure() collapses the FreeQuantumState in place
+            # and returns the measurement result (0 or 1).
+            # The photon is then retransmitted with its collapsed state.
 
-        if self.encoding["name"] == "polarization":
-            # ── BB84 / B92 ────────────────────────────────────────────
-            basis_idx = int(self.generator.integers(0, 2))   # 0=Z, 1=X
-            self.intercepted_bases.append(basis_idx)
+            if self.encoding["name"] == "polarization":
+                # Choose a random basis: 0 = Z {|H⟩,|V⟩}, 1 = X {|+⟩,|−⟩}
+                basis_idx = int(self.generator.integers(0, 2))
+                self.intercepted_bases.append(basis_idx)
+                basis  = self.encoding["bases"][basis_idx]
+                result = Photon.measure(basis, photon, self.generator)
+                self.intercepted_bits.append(result)
 
-            if basis_idx == 1:
-                # Rotação para a base diagonal (X) antes da medição
-                h_pre = Circuit(1)
-                h_pre.h(0)
-                qm.run_circuit(h_pre, [key])
+            elif self.encoding["name"] == "time_bin_cow":
+                # COW: measure in the Z (time-bin) basis.
+                # Destroys coherence between consecutive slots →
+                # Bob detects reduced Michelson visibility.
+                raw_basis = self.encoding["bases"][0]
+                basis = tuple(tuple(float(x.real) + float(x.imag) * 1j for x in vec) for vec in raw_basis)
+                result = Photon.measure(basis, photon, self.generator)
+                self.intercepted_bits.append(result)
+                self.intercepted_bases.append(0)
 
-            # Medição na base Z (padrão computacional)
-            meas = Circuit(1)
-            meas.measure(0)
-            result = qm.run_circuit(meas, [key])
-            bit = int(result.get(key, 0))
-            self.intercepted_bits.append(bit)
-
-            if basis_idx == 1:
-                # Rotação inversa: fóton fica no estado X colapsado correto.
-                # |0⟩ → |+⟩  ou  |1⟩ → |−⟩  (dependendo do resultado)
-                h_post = Circuit(1)
-                h_post.h(0)
-                qm.run_circuit(h_post, [key])
-
-        elif self.encoding["name"] == "time_bin_cow":
-            # ── COW ───────────────────────────────────────────────────
-            # Medição na base temporal (Z): destrói a coerência entre slots.
-            # Não há rotação de base — Eve apenas determina em qual slot o
-            # fóton está e retransmite nesse mesmo slot.
-            self.intercepted_bases.append(0)
-
-            meas = Circuit(1)
-            meas.measure(0)
-            result = qm.run_circuit(meas, [key])
-            bit = int(result.get(key, 0))
-            self.intercepted_bits.append(bit)
+            else:
+                # Unsupported encoding: forward without interference.
+                self.forwarded_count += 1
+                self.send_qubit(self.destination, photon)
+                return
 
         else:
-            # Codificação não suportada: encaminha sem interferência (fail-safe).
-            self.forwarded_count += 1
-            self.send_qubit(self.destination, photon)
-            return
+            # ── QuantumManager path (single_atom / memory photons) ────
+            qm  = self.timeline.quantum_manager
+            key = photon.quantum_state   # int key
 
-        # Retransmite o fóton (estado agora colapsado) para Bob.
+            if self.encoding["name"] == "polarization":
+                basis_idx = int(self.generator.integers(0, 2))
+                self.intercepted_bases.append(basis_idx)
+
+                if basis_idx == 1:
+                    # Rotate to X basis before measurement
+                    h_pre = Circuit(1)
+                    h_pre.h(0)
+                    qm.run_circuit(h_pre, [key])
+
+                meas = Circuit(1)
+                meas.measure(0)
+                result = qm.run_circuit(meas, [key])
+                bit = int(result.get(key, 0))
+                self.intercepted_bits.append(bit)
+
+                if basis_idx == 1:
+                    # Rotate back: |0⟩→|+⟩  or  |1⟩→|−⟩
+                    h_post = Circuit(1)
+                    h_post.h(0)
+                    qm.run_circuit(h_post, [key])
+
+            elif self.encoding["name"] == "time_bin_cow":
+                meas = Circuit(1)
+                meas.measure(0)
+                result = qm.run_circuit(meas, [key])
+                bit = int(result.get(key, 0))
+                self.intercepted_bits.append(bit)
+                self.intercepted_bases.append(0)
+
+            else:
+                self.forwarded_count += 1
+                self.send_qubit(self.destination, photon)
+                return
+
+        # Retransmit the photon (state now collapsed) to Bob.
         self.send_qubit(self.destination, photon)
 
     def get(self, photon, **kwargs) -> None:

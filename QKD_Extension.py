@@ -2,7 +2,7 @@ import math
 
 from matplotlib import pyplot as plt
 
-from sequence.components.optical_channel import QuantumChannel, ClassicalChannel
+from sequence.components.optical_channel import QuantumChannel, ClassicalChannel, EveQuantumChannel
 from sequence.kernel.event import Event
 from sequence.kernel.process import Process
 from sequence.kernel.timeline import Timeline
@@ -201,22 +201,20 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
         log.set_logger_level('DEBUG')
         log.track_module('BB84')
         log.track_module('light_source')
+
+    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
     
-    qc_ae = QuantumChannel("qc_ae", tl, distance=dist_ae, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc_eb = QuantumChannel("qc_eb", tl, distance=dist_eb, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc_ba = QuantumChannel("qc_ba", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    
-    cc_ab = ClassicalChannel("cc_ab", tl, distance=distance)
-    cc_ba = ClassicalChannel("cc_ba", tl, distance=distance)
-    cc_ab.delay += 1e9   # 1 ms
-    cc_ba.delay += 1e9
+    cc0 = ClassicalChannel("cc0", tl, distance=distance)
+    cc1 = ClassicalChannel("cc1", tl, distance=distance)
+    cc0.delay += 1e9   # 1 ms
+    cc1.delay += 1e9
     
     alice = QKDNode("alice", tl, stack_size=1)
     alice.set_seed(0)
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
-
-    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
 
     bob = QKDNode("bob", tl, stack_size=1)
     bob.set_seed(1)
@@ -224,12 +222,11 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
         for name, param in dp.items():
             bob.update_detector_params(i, name, param)
 
-    qc_ae.set_ends(alice, eve.name)
-    eve.destination = bob.name
-    qc_eb.set_ends(eve, bob.name)
-    qc_ba.set_ends(bob, alice.name)
-    cc_ab.set_ends(alice, bob.name)
-    cc_ba.set_ends(bob, alice.name)
+    qc0.set_ends(alice, bob.name)
+    qc1.set_ends(bob, alice.name)
+    cc0.set_ends(alice, bob.name)
+    cc1.set_ends(bob, alice.name)
+
     
     pair_bb84_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
     tl.schedule(Event(0, Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])))
@@ -250,21 +247,19 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
         log.track_module('B92')
         log.track_module('light_source')
 
-    qc_ae = QuantumChannel("qc_ae", tl, distance=dist_ae, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc_eb = QuantumChannel("qc_eb", tl, distance=dist_eb, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc_ba = QuantumChannel("qc_ba", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-
-    cc_ab = ClassicalChannel("cc_ab", tl, distance=distance)
-    cc_ba = ClassicalChannel("cc_ba", tl, distance=distance)
-    cc_ab.delay += 1e9
-    cc_ba.delay += 1e9
+    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    
+    cc0 = ClassicalChannel("cc0", tl, distance=distance)
+    cc1 = ClassicalChannel("cc1", tl, distance=distance)
+    cc0.delay += 1e9
+    cc1.delay += 1e9
 
     alice = QKDNode("alice", tl, stack_size=1, qkdtype=1)
     alice.set_seed(0)
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
-
-    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
 
     bob = QKDNode("bob", tl, stack_size=1, qkdtype=1)
     bob.set_seed(1)
@@ -272,12 +267,11 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
         for name, param in dp.items():
             bob.update_detector_params(i, name, param)
 
-    qc_ae.set_ends(alice, eve.name)
-    eve.destination = bob.name
-    qc_eb.set_ends(eve, bob.name)
-    qc_ba.set_ends(bob, alice.name)
-    cc_ab.set_ends(alice, bob.name)
-    cc_ba.set_ends(bob, alice.name)
+    qc0.set_ends(alice, bob.name)
+    qc1.set_ends(bob, alice.name)
+    cc0.set_ends(alice, bob.name)
+    cc1.set_ends(bob, alice.name)
+ 
 
     pair_b92_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
     tl.schedule(Event(0, Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])))
@@ -297,32 +291,30 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
         log.track_module('COW')
         log.track_module('light_source')
 
-    qc_ae = QuantumChannel("qc_ae", tl, distance=dist_ae, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc_eb = QuantumChannel("qc_eb", tl, distance=dist_eb, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc_ba = QuantumChannel("qc_ba", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    cc_ab = ClassicalChannel("cc_ab", tl, distance=distance)
-    cc_ba = ClassicalChannel("cc_ba", tl, distance=distance)
-    cc_ab.delay += 1e9
-    cc_ba.delay += 1e9
+    eve = EveNode("eve", tl, encoding=time_bin_cow, intercept_rate=eve_intercept_rate, seed=2)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    
+    cc0 = ClassicalChannel("cc0", tl, distance=distance)
+    cc1 = ClassicalChannel("cc1", tl, distance=distance)
+    cc0.delay += 1e9
+    cc1.delay += 1e9
 
     alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2)
     alice.set_seed(0)
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
-    eve = EveNode("eve", tl, encoding=time_bin_cow, intercept_rate=eve_intercept_rate, seed=2)
     bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2)
     bob.set_seed(1)
     for i, dp in enumerate(detector_params):
         for name, param in dp.items():
             bob.update_detector_params(i, name, param)
 
-    qc_ae.set_ends(alice, eve.name)
-    eve.destination = bob.name
-    qc_eb.set_ends(eve, bob.name)
-    qc_ba.set_ends(bob, alice.name)
-    cc_ab.set_ends(alice, bob.name)
-    cc_ba.set_ends(bob, alice.name)
+    qc0.set_ends(alice, bob.name)
+    qc1.set_ends(bob, alice.name)
+    cc0.set_ends(alice, bob.name)
+    cc1.set_ends(bob, alice.name)
 
     pair_cow_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
     tl.schedule(Event(0, Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])))
@@ -363,7 +355,7 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84 = simulation_BB84(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
         QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92 = simulation_B92(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
         QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=d, attenuation=att_lim, keysize=keysize)
-        
+
         # Com Eve
         QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
         QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
@@ -388,7 +380,6 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         arr[arr <= 0] = np.nan
         return np.log10(arr)
 
-    log = {'R_sk - BB84': skr_array[0], "QBER - BB84": qber_array[0], 'R_sk - B92': skr_array[1], "QBER - B92": qber_array[1], 'R_sk - COW': skr_array[2], "QBER - COW": qber_array[2], 'distance': d_array}
     metrics = {
         "distance":        np.array(d_list),
         "R_sk-BB84":       safe_log10(skr_bb84),
@@ -476,3 +467,12 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
+
+
+
+
+
+
+
+

@@ -44,8 +44,9 @@ This code is inspired by the original code for the BB84 protocol in https://gith
 """
 
 import math
+from collections import deque
 from enum import Enum, auto
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Deque, Tuple
 
 if TYPE_CHECKING:
     from ..topology.node import QKDNode
@@ -195,10 +196,7 @@ class COW(StackProtocol):
         self._pending_bob_indices: List[int] = []
         self._pending_bob_bits:    List[int] = []
 
-
-        # Bob-side detection buffer (populated in end_photon_pulse)
-        self.received_indices = []
-        self.received_bits = []
+        self._burst_queue: Deque[Tuple[List[int], List[int]]] = deque()
 
         # Key storage
         self.key = 0  # key as int
@@ -217,6 +215,10 @@ class COW(StackProtocol):
         self.throughputs = [] # measured in bits/sec
         self.error_rates = []
         self.visibility = [] # monitoring-line visibility
+        
+        # Cache da basis_list para set_measure_basis_list
+        self._cached_basis_list: List[int] = []
+        self._cached_basis_n: int = 0
 
     def pop(self, detector_index: int, time: int) -> None:
         """Method to receive detection events (currently unused)."""
@@ -278,8 +280,7 @@ class COW(StackProtocol):
             self.another.bit_lists = []
             self.another.decoy_positions = []
             self.another.key_bits = []
-            self.another.received_indices = []
-            self.another.received_bits = []
+            self.another._burst_queue = deque()
 
             self.latency = 0
             self.another.latency = 0
@@ -293,6 +294,9 @@ class COW(StackProtocol):
             # COW uses 2 time slots per symbol, so the burst covers twice as many
             # raw time-bin periods as the number of requested key bits.
             self.light_time = (self.key_lengths[0] / (self.ls_freq * ls.mean_photon_num)) * 2
+
+            # Invalida cache da basis_list ao mudar light_time
+            self._cached_basis_n = 0
 
             # send message that photon pulse is beginning, then send bits
             self.start_time = int(self.owner.timeline.now()) + round(self.owner.cchannels[self.another.owner.name].delay)
@@ -329,7 +333,6 @@ class COW(StackProtocol):
 
             # control hardware
             lightsource = self.owner.components[self.ls_name]
-            encoding_type = lightsource.encoding_type
 
             # Number of COW symbols in this burst
             num_symbols = int(self.light_time * self.ls_freq / 2)
@@ -379,9 +382,11 @@ class COW(StackProtocol):
         log.logger.debug(self.name + " setting COW measurement (beamsplitter model)")
         
         num_slots = int(self.light_time * self.ls_freq)
-        basis_list = [0] * num_slots
-        self.owner.components[self.qsd_name].set_basis_list(basis_list, self.start_time, self.ls_freq)
-        
+        if num_slots != self._cached_basis_n:
+            self._cached_basis_list = [0] * num_slots
+            self._cached_basis_n    = num_slots
+        self.owner.components[self.qsd_name].set_basis_list(self._cached_basis_list, self.start_time, self.ls_freq)
+
 
     def end_photon_pulse(self) -> None:
         """Method to process sent qubits."""
@@ -394,6 +399,13 @@ class COW(StackProtocol):
             # -1 → no detection or ambiguous; 0 → early-bin detection; 1 → late-bin detection
             raw_bits = self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name)
 
+            #num_symbols = len(raw_bits) // 2
+
+            detected_indices: List[int] = []
+            detected_bits:    List[int] = []
+
+
+            # Otimizado — operações numpy vetorizadas
             raw = numpy.array(raw_bits)
             early = raw[0::2]   # slots pares
             late  = raw[1::2]   # slots ímpares
@@ -411,10 +423,28 @@ class COW(StackProtocol):
             order = numpy.argsort(all_indices)
             detected_indices = all_indices[order].tolist()
             detected_bits    = all_bits[order].tolist()
+            
+            
+
+            
+            #for i in range(num_symbols):
+            #    early = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
+            #    late  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1
+            #
+            #    if early != -1 and late == -1:
+            #        detected_indices.append(i)
+            #        detected_bits.append(1)    # early-only → bit 1
+            #    elif early == -1 and late != -1:
+            #        detected_indices.append(i)
+            #        detected_bits.append(0)    # late-only  → bit 0
+            #    # both or neither → discard (decoy or multi-photon or loss)
 
             # Accumulate into the run-level buffers
-            self.received_indices.extend(detected_indices)
-            self.received_bits.extend(detected_bits)
+            #self.received_indices.extend(detected_indices)
+            #self.received_bits.extend(detected_bits)
+            
+            # ── CORREÇÃO: enfileira dados deste burst (não acumula na lista) ──
+            self._burst_queue.append((detected_indices, detected_bits))
 
             # ---- Read Michelson visibility if QSDetectorCOW is available ----
             qsd = self.owner.components[self.qsd_name]
@@ -459,8 +489,10 @@ class COW(StackProtocol):
 
                 self.start_time = int(msg.start_time) + self.owner.qchannels[src].delay
 
-                self.received_indices = []
-                self.received_bits    = []
+                #self.received_indices = []
+                #self.received_bits    = []
+                self._burst_queue     = deque()   # limpa fila ao iniciar nova rodada
+                self._cached_basis_n  = 0
 
                 self.set_measure_basis_list()
 
@@ -481,14 +513,33 @@ class COW(StackProtocol):
 
             elif msg.msg_type is COWMsgType.DECOY_POSITIONS:  # (Current node is Bob): compare bases
                 log.logger.debug(self.name + " received DECOY_POSITIONS")
-                decoy_set = set(msg.decoy_indices)
+                #decoy_set = set(msg.decoy_indices)
+                # ── CORREÇÃO: consome apenas os dados do burst correspondente ──
+                if not self._burst_queue:
+                    # Fila vazia: burst chegou mas dados ainda não foram processados
+                    # Isso pode ocorrer se o timing do canal clássico for mais
+                    # rápido que o do canal quântico. Ignora silenciosamente.
+                    return
+
+                burst_indices, burst_bits = self._burst_queue.popleft()
+
+                decoy_set      = set(msg.decoy_indices)
+                sifted_indices: List[int] = []
+                app_si = sifted_indices.append
+                app_kb = self.key_bits.append
+
+                # O(n_burst) ≈ O(9) — constante, independente do burst atual
+                for i, idx in enumerate(burst_indices):
+                    if idx not in decoy_set:
+                        app_si(idx)
+                        app_kb(burst_bits[i])
 
                 # Sift: keep only non-decoy detected symbols
-                sifted_indices: List[int] = []
-                for i, idx in enumerate(self.received_indices):
-                    if idx not in decoy_set:
-                        sifted_indices.append(idx)
-                        self.key_bits.append(self.received_bits[i])
+                #sifted_indices: List[int] = []
+                #for i, idx in enumerate(self.received_indices):
+                #    if idx not in decoy_set:
+                #        sifted_indices.append(idx)
+                #        self.key_bits.append(self.received_bits[i])
 
                 # Send sifted (non-decoy) indices to Alice for key alignment
                 message = COWMessage(COWMsgType.SIFTED_INDICES, self.another.name, indices=sifted_indices)

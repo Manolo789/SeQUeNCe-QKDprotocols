@@ -7,11 +7,11 @@ OpticalChannels must be attached to nodes on both ends.
 
 import heapq as hq
 import gmpy2
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ..kernel.timeline import Timeline
-    from ..topology.node import Node
+    from ..topology.node import Node, EveNode
     from ..components.photon import Photon
     from ..message import Message
 
@@ -251,6 +251,157 @@ class QuantumChannel(OpticalChannel):
 
     def _receiver_on_other_tl(self) -> bool:
         return self.timeline.get_entity_by_name(self.receiver) is None
+
+class EveQuantumChannel(QuantumChannel):
+    """Canal quântico com intercepção transparente por Eve.
+
+    Eve é inserida entre Alice e Bob **sem que nenhum deles saiba**.
+    O setup da simulação permanece idêntico ao caso sem Eve:
+
+        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, ...)
+        qc0.set_ends(alice, bob.name)   # ← mesmo código que sem Eve
+
+    Internamente, o canal divide-se em dois segmentos:
+        alice ──[seg1]──► eve ──[seg2]──► bob
+
+    O canal `seg2` (Eve → Bob) é criado automaticamente no `init()`.
+
+    Attributes:
+        eve_node (EveNode): nó espiã inserido no canal.
+        eve_position (float): posição fracionária de Eve ao longo do
+            canal (0 = junto de Alice, 1 = junto de Bob). Default 0.5.
+        _seg2 (QuantumChannel): segmento interno Eve → Bob, criado em
+            `init()` após `set_ends` definir o receptor final.
+    """
+
+    def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
+        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e7, eve_position: float = 0.5) -> None:
+        """
+        Args:
+            name:                 nome do canal.
+            timeline:             timeline da simulação.
+            eve_node:             nó EveNode a inserir no meio do canal.
+            attenuation:          atenuação da fibra em dB/m.
+            distance:             distância total Alice→Bob em metros.
+            polarization_fidelity: fidelidade de polarização (0–1).
+            light_speed:          velocidade da luz na fibra em m/ps.
+            frequency:            frequência máxima de transmissão em Hz.
+            eve_position:         posição fracionária de Eve (0–1).
+        """
+        dist_seg1 = distance * eve_position
+        # O segmento 1 (Alice→Eve) é o próprio canal — herda QuantumChannel
+        super().__init__(
+            name, timeline,
+            attenuation=attenuation,
+            distance=dist_seg1,
+            polarization_fidelity=polarization_fidelity,
+            light_speed=light_speed,
+            frequency=frequency,
+        )
+        self.eve_node: "EveNode" = eve_node
+        self.eve_position: float = eve_position
+        self._total_distance: float = distance
+        self._seg2: Optional[QuantumChannel] = None   # criado em init()
+
+    # ── QuantumChannel interface ──────────────────────────────────────────
+
+    def set_ends(self, sender: "Node", receiver: str) -> None:
+        """Registra Alice como emissora e intercepta o canal para Eve.
+
+        O canal é registrado em Alice sob o nome do receptor final (Bob),
+        de modo que `alice.send_qubit('bob', photon)` use este canal.
+        Eve permanece invisível para o protocolo.
+
+        Args:
+            sender:   nó de Alice.
+            receiver: nome do nó de Bob (receptor final).
+        """
+        # ── Segmento 1: Alice → Eve ───────────────────────────────────
+        # Registra este canal em Alice com a chave 'bob' (não 'eve').
+        # Assim alice.send_qubit('bob') usa este canal sem saber de Eve.
+        self.sender   = sender
+        self.receiver = receiver
+        sender.assign_qchannel(self, receiver)   # alice.qchannels['bob'] = self
+
+        # ── Segmento 2: Eve → Bob ─────────────────────────────────────
+        # Criado aqui (set_ends), não em init(), para não modificar
+        # timeline.entities durante a iteração de Timeline.init().
+        dist_seg2 = self._total_distance * (1.0 - self.eve_position)
+        seg2_name = f"{self.name}.seg2"
+        self._seg2 = QuantumChannel(
+            seg2_name,
+            self.timeline,
+            attenuation=self.attenuation,
+            distance=dist_seg2,
+            polarization_fidelity=self.polarization_fidelity,
+            light_speed=self.light_speed,
+            frequency=self.frequency,
+        )
+        # Registra _seg2 em Eve com a chave 'bob'.
+        # Eve chamará eve.send_qubit('bob') após intercepção.
+        self._seg2.set_ends(self.eve_node, self.receiver)
+
+        # Define o destino de retransmissão de Eve
+        self.eve_node.destination = self.receiver
+
+    # ── init: nada a fazer — Timeline.init() cuida de _seg2 ──────────────
+
+    def init(self) -> None:
+        """Inicializa ambos os segmentos e conecta Eve→Bob.
+
+        Chamado por Timeline.init() após set_ends ter sido executado.
+        `self.receiver` já contém o nome do receptor final (Bob).
+        """
+        # Inicializa o segmento 1 (Alice → Eve)
+        super().init()
+        
+    # ── transmit: redireciona fótons para Eve ─────────────────────────────
+
+    def transmit(self, qubit: "Photon", source: "Node") -> None:
+        """Transmite um fóton pelo segmento Alice→Eve.
+
+        Aplica perda e ruído de polarização do segmento 1, depois agenda
+        a entrega a Eve (não a Bob). Eve decidirá se intercepta ou
+        encaminha via `_seg2`.
+
+        O método é idêntico ao `QuantumChannel.transmit()`, exceto que
+        o receptor agendado é `eve_node` em vez de `self.receiver`.
+        """
+        assert self.delay >= 0 and self.loss <= 1, \
+            f"EveQuantumChannel.init() não foi executado para {self.name}"
+        assert source == self.sender
+
+        import heapq as hq
+        if len(self.send_bins) > 0:
+            time = -1
+            while time < self.timeline.now():
+                time_bin = hq.heappop(self.send_bins)
+                time = self.timebin_to_time(time_bin, self.frequency)
+            assert time == self.timeline.now()
+
+        if qubit.encoding_type["name"] == "fock":
+            key = qubit.quantum_state
+            self.timeline.quantum_manager.add_loss(key, self.loss)
+            self._schedule_to_eve(qubit, source)
+
+        elif (self.sender.get_generator().random() > self.loss) or qubit.is_null:
+            if qubit.is_null:
+                qubit.add_loss(self.loss)
+            if (qubit.encoding_type["name"] == "polarization"
+                    and self.sender.get_generator().random()
+                    > self.polarization_fidelity):
+                qubit.random_noise(self.get_generator())
+
+            self._schedule_to_eve(qubit, source)
+        # fóton perdido: não agenda nada
+
+    def _schedule_to_eve(self, qubit: "Photon", source: "Node") -> None:
+        """Agenda entrega do fóton a Eve após o atraso do segmento 1."""
+        future_time = self.timeline.now() + self.delay
+        process = Process(self.eve_node.name, "receive_qubit",
+                          [source.name, qubit])
+        event = Event(future_time, process)
+        self.timeline.schedule(event)
 
 
 class ClassicalChannel(OpticalChannel):
