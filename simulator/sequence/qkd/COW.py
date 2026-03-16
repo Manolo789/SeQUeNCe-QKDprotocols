@@ -410,8 +410,8 @@ class COW(StackProtocol):
             early = raw[0::2]   # slots pares
             late  = raw[1::2]   # slots ímpares
 
-            mask_bit1 = (early != -1) & (late == -1)
-            mask_bit0 = (early == -1) & (late != -1)
+            mask_bit1 = (early == -1) & (late != -1)
+            mask_bit0 = (early != -1) & (late == -1)
 
             indices_bit1 = numpy.where(mask_bit1)[0]
             indices_bit0 = numpy.where(mask_bit0)[0]
@@ -424,9 +424,7 @@ class COW(StackProtocol):
             detected_indices = all_indices[order].tolist()
             detected_bits    = all_bits[order].tolist()
             
-            
 
-            
             #for i in range(num_symbols):
             #    early = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
             #    late  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1

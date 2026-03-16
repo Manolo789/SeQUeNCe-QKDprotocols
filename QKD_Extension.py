@@ -419,18 +419,18 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     
     # display our collected metrics
     # Ideal scenario
-    fig, ax1 = plt.subplots(1, 2, figsize=(14, 5))
-    linha_y1, = ax1.plot(d_array, safe_log10(skr_bb84), linestyle='-', color='blue', label="R_sk(d) of the BB84")
-    linha_y2, = ax1.plot(d_array, safe_log10(skr_b92), linestyle='-', color='red', label="R_sk(d) of the B92")
-    linha_y3, = ax1.plot(d_array, safe_log10(skr_cow), linestyle='-', color='green', label="R_sk(d) of the COW")
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    linha_y1, = ax1.plot(np.array(d_list), safe_log10(skr_bb84), linestyle='-', color='blue', label="R_sk(d) of the BB84")
+    linha_y2, = ax1.plot(np.array(d_list), safe_log10(skr_b92), linestyle='-', color='red', label="R_sk(d) of the B92")
+    linha_y3, = ax1.plot(np.array(d_list), safe_log10(skr_cow), linestyle='-', color='green', label="R_sk(d) of the COW")
     ax1.set_xlabel("Distance (d) [m]")
     ax1.set_ylabel("log₁₀ Secret Key Rate (R_sk) [bits per sent qubit]")
     ax1.set_title(f"Aten.={att_lim} dB/m, Keysize={keysize} bits")
 
     ax2 = ax1.twinx()
-    linha_z1, = ax2.plot(d_array, qber_bb84, linestyle='--', color='orange', label="QBER(d) of the BB84")
-    linha_z2, = ax2.plot(d_array, qber_b92, linestyle='--', color='yellow', label="QBER(d) of the B92")
-    linha_z3, = ax2.plot(d_array, qber_cow, linestyle='--', color='black', label="QBER(d) of the COW")
+    linha_z1, = ax2.plot(np.array(d_list), qber_bb84, linestyle='--', color='orange', label="QBER(d) of the BB84")
+    linha_z2, = ax2.plot(np.array(d_list), qber_b92, linestyle='--', color='yellow', label="QBER(d) of the B92")
+    linha_z3, = ax2.plot(np.array(d_list), qber_cow, linestyle='--', color='black', label="QBER(d) of the COW")
     ax2.set_ylabel("QBER")
 
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3]
@@ -441,18 +441,18 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     plt.close()
     
     # Scenario with Eve
-    fig, ax1 = plt.subplots(1, 2, figsize=(14, 5))
-    linha_y1, = ax1.plot(d_array, safe_log10(skr_bb84e), linestyle='-', color='blue', label="R_sk(d) of the BB84+Eve")
-    linha_y2, = ax1.plot(d_array, safe_log10(skr_b92e), linestyle='-', color='red', label="R_sk(d) of the B92+Eve")
-    linha_y3, = ax1.plot(d_array, safe_log10(skr_cowe), linestyle='-', color='green', label="R_sk(d) of the COW+Eve")
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    linha_y1, = ax1.plot(np.array(d_list), safe_log10(skr_bb84e), linestyle='-', color='blue', label="R_sk(d) of the BB84+Eve")
+    linha_y2, = ax1.plot(np.array(d_list), safe_log10(skr_b92e), linestyle='-', color='red', label="R_sk(d) of the B92+Eve")
+    linha_y3, = ax1.plot(np.array(d_list), safe_log10(skr_cowe), linestyle='-', color='green', label="R_sk(d) of the COW+Eve")
     ax1.set_xlabel("Distance (d) [m]")
     ax1.set_ylabel("log₁₀ Secret Key Rate (R_sk) [bits per sent qubit]")
     ax1.set_title(f"Aten.={att_lim} dB/m, Keysize={keysize} bits")
 
     ax2 = ax1.twinx()
-    linha_z1, = ax2.plot(d_array, qber_bb84e, linestyle='--', color='orange', label="QBER(d) of the BB84+Eve")
-    linha_z2, = ax2.plot(d_array, qber_b92e, linestyle='--', color='yellow', label="QBER(d) of the B92+Eve")
-    linha_z3, = ax2.plot(d_array, qber_cowe, linestyle='--', color='black', label="QBER(d) of the COW+Eve")
+    linha_z1, = ax2.plot(np.array(d_list), qber_bb84e, linestyle='--', color='orange', label="QBER(d) of the BB84+Eve")
+    linha_z2, = ax2.plot(np.array(d_list), qber_b92e, linestyle='--', color='yellow', label="QBER(d) of the B92+Eve")
+    linha_z3, = ax2.plot(np.array(d_list), qber_cowe, linestyle='--', color='black', label="QBER(d) of the COW+Eve")
     ax2.set_ylabel("QBER")
 
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3]
@@ -467,12 +467,3 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
-
-
-
-
-
-
-
-
-
