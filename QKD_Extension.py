@@ -26,7 +26,7 @@ def _collect_metrics(protocol, distance: float, attenuation: float):
     secret_key_rate_mean = 0
 
     QBER = protocol.error_rates
-    THROUGHPUTS = protocol.throughputs
+    THROUGHPUTS = np.mean(protocol.throughputs)
     LATENCY = protocol.latency
     for i, e in enumerate(QBER):
         R_s = protocol.sifted_bits_length[i] / len(protocol.bit_lists[0])
