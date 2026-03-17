@@ -176,7 +176,7 @@ class MichelsonInterferometer(Entity):
                 stored = self._photon_buffer
                 self._photon_buffer = None
                 self._buffer_time = -1
-                self._interfere(photon)
+                self._interfere(photon, stored)
                 return
 
         # No matching partner yet: place this photon in the long-arm buffer
@@ -211,13 +211,14 @@ class MichelsonInterferometer(Entity):
 
         self._photon_buffer = None
         self._buffer_time = -1
-
+        
         # Isolated photon: random 50/50 exit (contributes equally to both
         # detectors and therefore does not bias the visibility estimate).
         idx = int(self.get_generator().random() > 0.5)
         self._receivers[idx].get(photon)
 
-    def _interfere(self, photon: "Photon") -> None:
+
+    def _interfere(self, photon: "Photon", stored: "Photon") -> None:
         """Apply two-photon interference and route the photon.
 
         For two coherent pulses with relative phase φ the interference
@@ -235,16 +236,26 @@ class MichelsonInterferometer(Entity):
         Args:
             photon (Photon): the arriving short-arm photon that triggers the
                 interference event.
+            stored (Photon): buffered long-arm photon paired with `photon`.
         """
+        is_coherent = (
+            getattr(photon, "coherent", True)
+            and getattr(stored, "coherent", True)
+        )
+        if not is_coherent:
+            # Fase relativa aleatória → roteamento 50/50
+            idx = int(self.get_generator().random() > 0.5)
+            self._receivers[idx].get(photon)
+            return
+        
         phi = self.phase
         if self.phase_error > 0.0:
             phi += float(self.get_generator().normal(0.0, self.phase_error))
-
         prob_dm1 = cos(phi / 2.0) ** 2   # = (1 + cos φ) / 2
+        
         # prob_dm2 = 1 - prob_dm1          # = (1 − cos φ) / 2
 
-        samp = self.get_generator().random()
-        if samp < prob_dm1:
+        if self.get_generator().random() < prob_dm1:
             self._receivers[0].get(photon)   # DM1 — constructive
         else:
             self._receivers[1].get(photon)   # DM2 — destructive

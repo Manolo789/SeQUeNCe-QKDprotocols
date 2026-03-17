@@ -36,8 +36,6 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """
 
-
-
 """Definition of COW protocol implementation.
 
 This code is inspired by the original code for the BB84 protocol in https://github.com/sequence-toolbox/SeQUeNCe/blob/master/sequence/qkd/BB84.py
@@ -137,8 +135,6 @@ class COW(StackProtocol):
         decoy_positions (list[list[int]]): Alice's decoy positions per burst.
         _pending_bob_indices (list[int]): Bob's detections buffered at Alice.
         _pending_bob_bits (list[int]): Bob's raw bits buffered at Alice.
-        received_indices (list[int]): Bob's accumulated detected indices.
-        received_bits (list[int]): Bob's accumulated raw bits.
         key (int): most recent key as integer.
         key_bits (list[int]): accumulated sifted key bits.
         another (COW): partner protocol.
@@ -404,7 +400,6 @@ class COW(StackProtocol):
             detected_indices: List[int] = []
             detected_bits:    List[int] = []
 
-
             # Otimizado — operações numpy vetorizadas
             raw = numpy.array(raw_bits)
             early = raw[0::2]   # slots pares
@@ -418,28 +413,11 @@ class COW(StackProtocol):
 
             all_indices = numpy.concatenate([indices_bit0, indices_bit1])
             all_bits    = numpy.concatenate([numpy.zeros(len(indices_bit0), dtype=int),
-                               numpy.ones (len(indices_bit1), dtype=int)])
+                               numpy.ones(len(indices_bit1), dtype=int)])
 
             order = numpy.argsort(all_indices)
             detected_indices = all_indices[order].tolist()
             detected_bits    = all_bits[order].tolist()
-            
-
-            #for i in range(num_symbols):
-            #    early = raw_bits[2 * i]     if 2 * i     < len(raw_bits) else -1
-            #    late  = raw_bits[2 * i + 1] if 2 * i + 1 < len(raw_bits) else -1
-            #
-            #    if early != -1 and late == -1:
-            #        detected_indices.append(i)
-            #        detected_bits.append(1)    # early-only → bit 1
-            #    elif early == -1 and late != -1:
-            #        detected_indices.append(i)
-            #        detected_bits.append(0)    # late-only  → bit 0
-            #    # both or neither → discard (decoy or multi-photon or loss)
-
-            # Accumulate into the run-level buffers
-            #self.received_indices.extend(detected_indices)
-            #self.received_bits.extend(detected_bits)
             
             # ── CORREÇÃO: enfileira dados deste burst (não acumula na lista) ──
             self._burst_queue.append((detected_indices, detected_bits))
@@ -448,6 +426,7 @@ class COW(StackProtocol):
             qsd = self.owner.components[self.qsd_name]
             if hasattr(qsd, "get_monitoring_visibility"):
                 v = qsd.get_monitoring_visibility()
+                #print(f"Visibility = {v}")
                 self.visibility.append(v)
                 log.logger.info(self.name + f" [COW] Michelson visibility = {v:.4f} "+f"(threshold = {self.VISIBILITY_THRESHOLD})")
                 if v < self.VISIBILITY_THRESHOLD:
@@ -487,8 +466,6 @@ class COW(StackProtocol):
 
                 self.start_time = int(msg.start_time) + self.owner.qchannels[src].delay
 
-                #self.received_indices = []
-                #self.received_bits    = []
                 self._burst_queue     = deque()   # limpa fila ao iniciar nova rodada
                 self._cached_basis_n  = 0
 
@@ -499,7 +476,7 @@ class COW(StackProtocol):
                 event = Event(self.start_time + round(self.light_time * 1e12) - 1, process)
                 self.owner.timeline.schedule(event)
 
-            elif msg.msg_type is COWMsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send basis
+            elif msg.msg_type is COWMsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send decoys positions
                 log.logger.debug(self.name + " received RECEIVED_QUBITS message")
                 self._pending_bob_indices = list(msg.indices)
                 self._pending_bob_bits    = list(msg.bits)
@@ -511,12 +488,8 @@ class COW(StackProtocol):
 
             elif msg.msg_type is COWMsgType.DECOY_POSITIONS:  # (Current node is Bob): compare bases
                 log.logger.debug(self.name + " received DECOY_POSITIONS")
-                #decoy_set = set(msg.decoy_indices)
-                # ── CORREÇÃO: consome apenas os dados do burst correspondente ──
+
                 if not self._burst_queue:
-                    # Fila vazia: burst chegou mas dados ainda não foram processados
-                    # Isso pode ocorrer se o timing do canal clássico for mais
-                    # rápido que o do canal quântico. Ignora silenciosamente.
                     return
 
                 burst_indices, burst_bits = self._burst_queue.popleft()
@@ -526,18 +499,10 @@ class COW(StackProtocol):
                 app_si = sifted_indices.append
                 app_kb = self.key_bits.append
 
-                # O(n_burst) ≈ O(9) — constante, independente do burst atual
                 for i, idx in enumerate(burst_indices):
                     if idx not in decoy_set:
                         app_si(idx)
                         app_kb(burst_bits[i])
-
-                # Sift: keep only non-decoy detected symbols
-                #sifted_indices: List[int] = []
-                #for i, idx in enumerate(self.received_indices):
-                #    if idx not in decoy_set:
-                #        sifted_indices.append(idx)
-                #        self.key_bits.append(self.received_bits[i])
 
                 # Send sifted (non-decoy) indices to Alice for key alignment
                 message = COWMessage(COWMsgType.SIFTED_INDICES, self.another.name, indices=sifted_indices)
@@ -575,10 +540,13 @@ class COW(StackProtocol):
                         
                         # Compute QBER by XOR-ing Alice's and Bob's keys
                         key_diff = self.key ^ self.another.key
+                        #print(f"self.key = {self.key}, self.another.key = {self.another.key}")
+                        #print(f"self.key ^ self.another.key = {key_diff}")
                         num_errors = 0
                         while key_diff:
                             key_diff &= key_diff - 1
                             num_errors += 1
+                        #print(f"Error: {num_errors}, Key_lengths {self.key_lengths}")
                         self.error_rates.append(num_errors / self.key_lengths[0])
 
                         self.keys_left_list[0] -= 1

@@ -34,6 +34,31 @@ def _collect_metrics(protocol, distance: float, attenuation: float):
     SECRET_KEY_RATE = secret_key_rate_mean/len(QBER)
     LOSS = 1-10**((distance*attenuation)/(-10))
     return QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS
+    
+def _collect_cow_metrics(protocol, visibility, ls_params, distance: float, attenuation: float):
+    """Extrai métricas COW com SKR ajustado por visibilidade do monitoramento."""
+    secret_key_rate_mean = 0
+
+    qber_list = protocol.error_rates
+    throughputs = np.mean(protocol.throughputs)
+    latency = protocol.latency
+    
+    # R_sk calculated based on https://doi.org/10.1063/1.2126792
+    loss = 1 - 10 ** ((distance * attenuation) / (-10))
+    t = loss - 1
+    
+    mean_photon_num = ls_params["mean_photon_num"]
+    r = mean_photon_num*(1-t)
+
+    for i, e in enumerate(qber_list):
+        R_s = protocol.sifted_bits_length[i] / len(protocol.bit_lists[0])
+        eve_info = r + ((1 - visibility[i])*(1 + math.e**(-mean_photon_num*t))/(2*math.e**(-mean_photon_num*t)))
+        secret_key_rate_mean += R_s * (1 - binary_entropy(e) - eve_info)
+
+    secret_key_rate = secret_key_rate_mean / len(qber_list)
+    
+    return qber_list, throughputs, latency, secret_key_rate, loss
+
 
 
 def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
@@ -185,8 +210,9 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
     tl.init()
     tl.run()
 
-    QBER, THROUGHPUTS, LATENCY, SKR, LOSS = _collect_metrics(alice.protocol_stack[0], distance, attenuation)
     VISIBILITY = bob.protocol_stack[0].visibility
+    QBER, THROUGHPUTS, LATENCY, SKR, LOSS = _collect_cow_metrics(alice.protocol_stack[0], VISIBILITY, ls_params, distance, attenuation)
+    
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, VISIBILITY
     
     
@@ -321,8 +347,9 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     tl.init()
     tl.run()
     
-    QBER, THROUGHPUTS, LATENCY, SKR, LOSS = _collect_metrics(alice.protocol_stack[0], distance, attenuation)
     VISIBILITY = bob.protocol_stack[0].visibility
+    QBER, THROUGHPUTS, LATENCY, SKR, LOSS = _collect_cow_metrics(alice.protocol_stack[0], VISIBILITY, ls_params, distance, attenuation)
+    
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, VISIBILITY
 
 # plot_graph (
@@ -331,6 +358,7 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
 #            att_lim = attenuation limit (in dB/meters)
 #            keysize = key size (in number of logical bits)):
 def plot_graph(d_step, d_lim, att_lim, keysize):
+    
     d_list = []
 
     ls_params = {"frequency": 8e7, "wavelength":795, "mean_photon_num": 0.1}
@@ -339,6 +367,7 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
+    """
 
     skr_bb84, qber_bb84, throughputs_bb84, latency_bb84, loss_bb84 = [], [], [], [], []
     skr_b92, qber_b92, throughputs_b92, latency_b92, loss_b92 = [], [], [], [], []
@@ -347,6 +376,7 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     skr_bb84e, qber_bb84e, throughputs_bb84e, latency_bb84e, loss_bb84e = [], [], [], [], []
     skr_b92e, qber_b92e, throughputs_b92e, latency_b92e, loss_b92e = [], [], [], [], []
     skr_cowe, qber_cowe, throughputs_cowe, latency_cowe, loss_cowe, visibility_cowe = [], [], [], [], [], []
+    
 
 
     d = 0
@@ -461,6 +491,15 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
 
     plt.savefig("graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
+    """
+    QBER_COW, _, _, SECRET_KEY_RATE_COW, _, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=1000, attenuation=att_lim, keysize=keysize)
+    print("QBER-COW: ", np.mean(QBER_COW))
+    print("R_sk-COW: ", SECRET_KEY_RATE_COW)
+    print("Visibility-COW: ", np.mean(VISIBILITY_COW))
+    QBER_COWe, _, _, SECRET_KEY_RATE_COWe, _, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=10000, attenuation=att_lim, keysize=keysize)
+    print("QBER-COW+Eve: ", np.mean(QBER_COWe))
+    print("R_sk-COW+Eve: ", SECRET_KEY_RATE_COWe)
+    print("Visibility-COW+Eve: ", np.mean(VISIBILITY_COWe))
 
 def run_simulation():
     plot_graph(d_step=100, d_lim=10000, att_lim=0.0002, keysize=25)

@@ -844,10 +844,11 @@ class EveNode(Node):
                 # Bob detects reduced Michelson visibility.
                 raw_basis = self.encoding["bases"][0]
                 basis = tuple(tuple(float(x.real) + float(x.imag) * 1j for x in vec) for vec in raw_basis)
+                
                 result = Photon.measure(basis, photon, self.generator)
                 self.intercepted_bits.append(result)
                 self.intercepted_bases.append(0)
-
+                photon.coherent = False
             else:
                 # Unsupported encoding: forward without interference.
                 self.forwarded_count += 1
