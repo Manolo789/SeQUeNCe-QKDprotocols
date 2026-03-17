@@ -186,6 +186,7 @@ class B92(StackProtocol):
         self.latency = 0  # measured in seconds
         self.last_key_time = 0
         self.sifted_bits_length = []
+        self.send_bits_length = 0
         self.throughputs = []  # measured in bits/sec
         self.error_rates = []
 
@@ -304,6 +305,7 @@ class B92(StackProtocol):
 
             self.basis_lists.append(bit_list)
             self.bit_lists.append(bit_list)
+            self.send_bits_length = num_pulses
 
             # schedule another
             self.start_time = self.owner.timeline.now()
@@ -403,9 +405,10 @@ class B92(StackProtocol):
                 basis_list = self.basis_lists.pop(0)
                 bits = self.bit_lists.pop(0)
                 for i, b in enumerate(basis_list_alice):
-                    if bits[i] != -1 and basis_list[i] == bits[i]:
+                    if bits[i] != -1 and basis_list[i] != bits[i]:
                         indices.append(i)
                         self.key_bits.append(bits[i])
+                    
 
                 # send to Alice list of matching indices
                 message = B92Message(B92MsgType.MATCHING_INDICES, self.another.name, indices=indices)
@@ -428,7 +431,7 @@ class B92(StackProtocol):
 
                     while len(self.key_bits) >= self.key_lengths[0] and self.keys_left_list[0] > 0:
                         log.logger.info(self.name + " generated a valid key")
-                        self.sifted_bits_length.append(len(self.key_bits)) ### Editado
+                        self.sifted_bits_length.append(len(indices))
                         self.set_key()  # convert from binary list to int
                         self._pop(info=self.key)
                         self.another.set_key()

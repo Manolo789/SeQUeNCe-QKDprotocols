@@ -141,7 +141,8 @@ class BB84(StackProtocol):
         # metrics
         self.latency = 0  # measured in seconds
         self.last_key_time = 0
-        self.sifted_bits_length = [] ### Editado
+        self.sifted_bits_length = []
+        self.send_bits_length = 0
         self.throughputs = []  # measured in bits/sec
         self.error_rates = []
 
@@ -261,6 +262,7 @@ class BB84(StackProtocol):
 
             self.basis_lists.append(basis_list)
             self.bit_lists.append(bit_list)
+            self.send_bits_length = num_pulses
 
             # schedule another
             self.start_time = self.owner.timeline.now()
@@ -385,7 +387,7 @@ class BB84(StackProtocol):
 
                     while len(self.key_bits) >= self.key_lengths[0] and self.keys_left_list[0] > 0:
                         log.logger.info(self.name + " generated a valid key")
-                        self.sifted_bits_length.append(len(self.key_bits)) ### Editado
+                        self.sifted_bits_length.append(len(indices))
                         self.set_key()  # convert from binary list to int
                         self._pop(info=self.key)
                         self.another.set_key()

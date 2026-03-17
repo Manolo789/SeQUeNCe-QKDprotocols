@@ -128,6 +128,7 @@ class QSDetectorCOW(QSDetector):
         """Initialise all sub-components."""
         for component in self.components:
             component.owner = self.owner
+        self.interferometer.owner = self   # ensure record_interference is reachable
         self.interferometer.init()
         for d in self.detectors:
             d.init()
@@ -166,9 +167,22 @@ class QSDetectorCOW(QSDetector):
         idx = self.detectors.index(detector)
         self.trigger_times[idx].append(info["time"])
 
-        if idx == 1:
+    def record_interference(self, port: int) -> None:
+        """Record a genuine two-photon interference event.
+ 
+        Called by :class:`MichelsonInterferometer._interfere` immediately
+        before routing the photon to ``_receivers[port]``. This is the
+        only place where ``_dm1_count`` and ``_dm2_count`` are incremented,
+        ensuring that isolated photons exiting via the timeout path are
+        excluded from the visibility calculation.
+ 
+        Args:
+            port (int): receiver index — 0 for DM1 (constructive),
+                1 for DM2 (destructive).
+        """
+        if port == 0:
             self._dm1_count += 1
-        elif idx == 2:
+        elif port == 1:
             self._dm2_count += 1
 
     # ------------------------------------------------------------------

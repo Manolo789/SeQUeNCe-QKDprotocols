@@ -208,6 +208,7 @@ class COW(StackProtocol):
         self.latency = 0  # measured in seconds
         self.last_key_time = 0
         self.sifted_bits_length = []
+        self.send_bits_length = 0
         self.throughputs = [] # measured in bits/sec
         self.error_rates = []
         self.visibility = [] # monitoring-line visibility
@@ -340,6 +341,7 @@ class COW(StackProtocol):
             decoy_pos = [int(i) for i, d in enumerate(is_decoy) if d]
             self.bit_lists.append(bit_list.tolist())
             self.decoy_positions.append(decoy_pos)
+            self.send_bits_length = num_symbols
             
             state_list = build_cow_state_list(bit_list.tolist(), is_decoy.tolist())
             lightsource.emit(state_list)
@@ -395,8 +397,6 @@ class COW(StackProtocol):
             # -1 → no detection or ambiguous; 0 → early-bin detection; 1 → late-bin detection
             raw_bits = self.owner.get_bits(self.light_time, self.start_time, self.ls_freq, self.qsd_name)
 
-            #num_symbols = len(raw_bits) // 2
-
             detected_indices: List[int] = []
             detected_bits:    List[int] = []
 
@@ -426,7 +426,6 @@ class COW(StackProtocol):
             qsd = self.owner.components[self.qsd_name]
             if hasattr(qsd, "get_monitoring_visibility"):
                 v = qsd.get_monitoring_visibility()
-                #print(f"Visibility = {v}")
                 self.visibility.append(v)
                 log.logger.info(self.name + f" [COW] Michelson visibility = {v:.4f} "+f"(threshold = {self.VISIBILITY_THRESHOLD})")
                 if v < self.VISIBILITY_THRESHOLD:
@@ -526,7 +525,7 @@ class COW(StackProtocol):
                     throughput = self.key_lengths[0] * 1e12 / max(self.owner.timeline.now() - self.last_key_time, 1)
                     while len(self.key_bits) >= self.key_lengths[0] and self.keys_left_list[0] > 0:
                         log.logger.info(self.name + " generated a valid key")
-                        self.sifted_bits_length.append(len(self.key_bits))
+                        self.sifted_bits_length.append(len(msg.indices))
                         self.set_key()  # convert from binary list to int
                         self._pop(info=self.key)
                         self.another.set_key()
@@ -540,13 +539,10 @@ class COW(StackProtocol):
                         
                         # Compute QBER by XOR-ing Alice's and Bob's keys
                         key_diff = self.key ^ self.another.key
-                        #print(f"self.key = {self.key}, self.another.key = {self.another.key}")
-                        #print(f"self.key ^ self.another.key = {key_diff}")
                         num_errors = 0
                         while key_diff:
                             key_diff &= key_diff - 1
                             num_errors += 1
-                        #print(f"Error: {num_errors}, Key_lengths {self.key_lengths}")
                         self.error_rates.append(num_errors / self.key_lengths[0])
 
                         self.keys_left_list[0] -= 1

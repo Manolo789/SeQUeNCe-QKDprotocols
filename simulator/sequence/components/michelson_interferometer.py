@@ -245,6 +245,8 @@ class MichelsonInterferometer(Entity):
         if not is_coherent:
             # Fase relativa aleatória → roteamento 50/50
             idx = int(self.get_generator().random() > 0.5)
+            if hasattr(self.owner, "record_interference"):
+                self.owner.record_interference(idx)
             self._receivers[idx].get(photon)
             return
         
@@ -256,8 +258,12 @@ class MichelsonInterferometer(Entity):
         # prob_dm2 = 1 - prob_dm1          # = (1 − cos φ) / 2
 
         if self.get_generator().random() < prob_dm1:
+            if hasattr(self.owner, "record_interference"):
+                self.owner.record_interference(0)
             self._receivers[0].get(photon)   # DM1 — constructive
         else:
+            if hasattr(self.owner, "record_interference"):
+                self.owner.record_interference(1)
             self._receivers[1].get(photon)   # DM2 — destructive
 
     # ------------------------------------------------------------------
