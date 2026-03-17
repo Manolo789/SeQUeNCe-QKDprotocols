@@ -505,9 +505,10 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     plt.close()
     """
     
-    QBER_BB84, _, _, SECRET_KEY_RATE_BB84, _ = simulation_B92(ls_params, detector_params, distance=700, attenuation=0, keysize=keysize)
-    print("QBER-BB84: ", np.mean(QBER_BB84))
-    print("R_sk-BB84: ", SECRET_KEY_RATE_BB84)
+    QBER_B92, _, _, SECRET_KEY_RATE_B92, _, RS_B92 = simulation_B92(ls_params, detector_params, distance=700, attenuation=0, keysize=keysize)
+    print("QBER-B92: ", np.mean(QBER_B92))
+    print("R_s-B92: ", RS_B92)
+    print("R_sk-B92: ", SECRET_KEY_RATE_B92)
     """
     QBER_COW, _, _, SECRET_KEY_RATE_COW, _, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=1000, attenuation=att_lim, keysize=keysize)
     print("QBER-COW: ", np.mean(QBER_COW))
