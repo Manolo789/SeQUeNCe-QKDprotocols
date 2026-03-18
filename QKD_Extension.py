@@ -67,7 +67,7 @@ def _collect_cow_metrics(protocol, visibility, ls_params, distance: float, atten
 
 
 
-def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
+def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp"):
     tl = Timeline(runtime*1e9)
     tl.show_progress = True
 
@@ -87,14 +87,14 @@ def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, dis
     cc1.delay += 1e9
 
     # Alice
-    alice = QKDNode("alice", tl, stack_size=1)
+    alice = QKDNode("alice", tl, stack_size=1, source_type=source_type)
     alice.set_seed(0)
 
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
     # Bob
-    bob = QKDNode("bob", tl, stack_size=1)
+    bob = QKDNode("bob", tl, stack_size=1, source_type=source_type)
     bob.set_seed(1)
 
     for i in range(len(detector_params)):
@@ -117,7 +117,7 @@ def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, dis
 
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
-def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
+def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp"):
     tl = Timeline(runtime*1e9)
     tl.show_progress = True
 
@@ -137,14 +137,14 @@ def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, dist
     cc1.delay += 1e9
 
     # Alice
-    alice = QKDNode("alice", tl, stack_size=1, qkdtype=1)
+    alice = QKDNode("alice", tl, stack_size=1, qkdtype=1, source_type=source_type)
     alice.set_seed(0)
 
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
     # Bob
-    bob = QKDNode("bob", tl, stack_size=1, qkdtype=1)
+    bob = QKDNode("bob", tl, stack_size=1, qkdtype=1, source_type=source_type)
     bob.set_seed(1)
 
     for i in range(len(detector_params)):
@@ -188,14 +188,14 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
     cc1.delay += 1e9
 
     # Alice
-    alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2)
+    alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
     alice.set_seed(0)
 
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
     # Bob
-    bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2)
+    bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
     bob.set_seed(1)
 
     for i in range(len(detector_params)):
@@ -222,7 +222,7 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s, VISIBILITY
     
     
-def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
+def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5, source_type="wcp"):
     dist_ae = distance * eve_position
     dist_eb = distance * (1.0 - eve_position)
 
@@ -243,12 +243,12 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
     cc0.delay += 1e9   # 1 ms
     cc1.delay += 1e9
     
-    alice = QKDNode("alice", tl, stack_size=1)
+    alice = QKDNode("alice", tl, stack_size=1, source_type=source_type)
     alice.set_seed(0)
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
-    bob = QKDNode("bob", tl, stack_size=1)
+    bob = QKDNode("bob", tl, stack_size=1, source_type=source_type)
     bob.set_seed(1)
     for i, dp in enumerate(detector_params):
         for name, param in dp.items():
@@ -267,7 +267,7 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
     
 
-def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
+def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5, source_type="wcp"):
     dist_ae = distance * eve_position
     dist_eb = distance * (1.0 - eve_position)
 
@@ -288,12 +288,12 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     cc0.delay += 1e9
     cc1.delay += 1e9
 
-    alice = QKDNode("alice", tl, stack_size=1, qkdtype=1)
+    alice = QKDNode("alice", tl, stack_size=1, qkdtype=1, source_type=source_type)
     alice.set_seed(0)
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
-    bob = QKDNode("bob", tl, stack_size=1, qkdtype=1)
+    bob = QKDNode("bob", tl, stack_size=1, qkdtype=1, source_type=source_type)
     bob.set_seed(1)
     for i, dp in enumerate(detector_params):
         for name, param in dp.items():
@@ -332,12 +332,12 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     cc0.delay += 1e9
     cc1.delay += 1e9
 
-    alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2)
+    alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
     alice.set_seed(0)
     for name, param in ls_params.items():
         alice.update_lightsource_params(name, param)
 
-    bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2)
+    bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
     bob.set_seed(1)
     for i, dp in enumerate(detector_params):
         for name, param in dp.items():
@@ -367,7 +367,7 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     
     d_list = []
 
-    ls_params = {"frequency": 8e7, "wavelength":780, "mean_photon_num": 0.5}
+    ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
     detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
     detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
@@ -388,13 +388,13 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     d = 0
     while d <= d_lim:
         # Sem Eve (Cenário Ideal)
-        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
-        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
+        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
+        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
         QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=d, attenuation=att_lim, keysize=keysize)
 
         # Com Eve
-        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
-        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize)
+        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
+        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
         QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=d, attenuation=att_lim, keysize=keysize)
         
         d_list.append(d)
@@ -505,10 +505,12 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     plt.close()
     """
     
-    QBER_B92, _, _, SECRET_KEY_RATE_B92, _, RS_B92 = simulation_B92(ls_params, detector_params, distance=700, attenuation=0, keysize=keysize)
-    print("QBER-B92: ", np.mean(QBER_B92))
-    print("R_s-B92: ", RS_B92)
-    print("R_sk-B92: ", SECRET_KEY_RATE_B92)
+    QBER_B92, _, _, SECRET_KEY_RATE_B92, _, RS_B92, v = simulation_COW_Eve(ls_params, detector_params_cow, runtime=20, distance=700, polarization_fidelity=1, attenuation=0, keysize=keysize)
+    print()
+    print("QBER-COW+Eve: ", np.mean(QBER_B92))
+    print("R_s-COW+Eve: ", RS_B92)
+    print("R_sk-COW+Eve: ", SECRET_KEY_RATE_B92)
+    print("V-COW+Eve: ", np.mean(np.array(v)))
     """
     QBER_COW, _, _, SECRET_KEY_RATE_COW, _, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=1000, attenuation=att_lim, keysize=keysize)
     print("QBER-COW: ", np.mean(QBER_COW))

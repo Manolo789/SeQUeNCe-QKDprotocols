@@ -27,6 +27,7 @@ from ..components.memory import MemoryArray
 from ..components.bsm import SingleAtomBSM, SingleHeraldedBSM
 from ..components.light_source import LightSource
 from ..components.cow_light_source import COWLightSource
+from ..components.single_photon_source import SinglePhotonSource
 from ..components.detector import QSDetector, QSDetectorPolarization, QSDetectorTimeBin
 from ..components.qsdetector_cow import QSDetectorCOW
 from ..components.circuit import Circuit
@@ -504,7 +505,7 @@ class QKDNode(Node):
     """
 
     def __init__(self, name: str, timeline: "Timeline", encoding=polarization, stack_size=5,
-                 qkdtype=0, seed=None, component_templates=None):
+                 qkdtype=0, seed=None, component_templates=None, source_type="wcp"):
         """Constructor for the qkd node class.
 
         Args:
@@ -513,6 +514,8 @@ class QKDNode(Node):
             encoding (dict[str, Any]): encoding scheme for qubits (from encoding module) (default polarization).
             stack_size (int): number of qkd protocols to include in the protocol stack (default 5).
             qkdtype (int): 0 (BB84 QKD protocol), 1 (B92 QKD protocol), 2 (COW QKD protocol)
+            source_type (str): "wcp" for weak coherent pulse (Poisson),
+                               "sps" for ideal single-photon source.
         """
 
         super().__init__(name, timeline, seed)
@@ -527,11 +530,17 @@ class QKDNode(Node):
         if encoding["name"] == "time_bin_cow":
             ls_args = component_templates.get("COWLightSource", {})
             lightsource = COWLightSource(ls_name, timeline, encoding_type=encoding, **ls_args)
+
             self.add_component(lightsource)
             lightsource.add_receiver(self)
         else:
             ls_args = component_templates.get("LightSource", {})
-            lightsource = LightSource(ls_name, timeline, encoding_type=encoding, **ls_args)
+            if source_type == "sps":
+                lightsource = SinglePhotonSource(
+                    ls_name, timeline, encoding_type=encoding, **ls_args)
+            else:
+                lightsource = LightSource(
+                    ls_name, timeline, encoding_type=encoding, **ls_args)
             self.add_component(lightsource)
             lightsource.add_receiver(self)
 

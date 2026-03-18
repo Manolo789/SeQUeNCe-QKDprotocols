@@ -427,6 +427,7 @@ class COW(StackProtocol):
             if hasattr(qsd, "get_monitoring_visibility"):
                 v = qsd.get_monitoring_visibility()
                 self.visibility.append(v)
+                print(f"Visibility = {v}")
                 log.logger.info(self.name + f" [COW] Michelson visibility = {v:.4f} "+f"(threshold = {self.VISIBILITY_THRESHOLD})")
                 if v < self.VISIBILITY_THRESHOLD:
                     log.logger.warning(self.name + " [COW] visibility below threshold — "+"possible eavesdropping or interferometer drift!")
