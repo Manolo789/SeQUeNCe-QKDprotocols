@@ -22,9 +22,10 @@ transmission coefficient t_B ≈ 1:
 
 Visibility measurement
 ----------------------
-After each burst the protocol calls :meth:`get_monitoring_visibility` which
-returns the fringe visibility estimated from the DM1 and DM2 detection
-counts accumulated since the last call.
+After each key-generation session the protocol calls
+:meth:`get_session_visibility` which returns the fringe visibility
+estimated from the DM1 and DM2 detection counts accumulated **since the
+last session reset** — matching the definition in Eq. (3) of Stucki et al.
 
 The dataline detection times are retrieved via the standard
 :meth:`get_photon_times` interface (index 0 → DB only), maintaining
@@ -58,8 +59,12 @@ class QSDetectorCOW(QSDetector):
         interferometer (MichelsonInterferometer): monitoring-line interferometer.
         detectors (list[Detector]): [DB, DM1, DM2].
         trigger_times (list[list[int]]): detection times per detector.
-        _dm1_count (int): DM1 detections since last visibility reset.
-        _dm2_count (int): DM2 detections since last visibility reset.
+        _session_dm1 (int): DM1 interference events accumulated over the
+            entire key-generation session (reset only by
+            :meth:`reset_session_counters`).
+        _session_dm2 (int): DM2 interference events accumulated over the
+            entire key-generation session.
+
     """
 
     def __init__(
@@ -114,8 +119,16 @@ class QSDetectorCOW(QSDetector):
             d.attach(self)
 
         self.trigger_times: list[list[int]] = [[], [], []]
-        self._dm1_count: int = 0
-        self._dm2_count: int = 0
+
+        
+        # Session-level counters — accumulated across all bursts within
+        # one key-generation run.  Reset only by reset_session_counters().
+        # This implements the paper's Eq. (3): V is estimated from counts
+        # accumulated over the entire communication session, not per burst.
+        self._session_dm1: int = 0
+        self._session_dm2: int = 0
+
+
 
         # Register all components for init()
         self.components = self.detectors + [self.interferometer]
@@ -133,8 +146,10 @@ class QSDetectorCOW(QSDetector):
         for d in self.detectors:
             d.init()
         self.trigger_times = [[], [], []]
-        self._dm1_count = 0
-        self._dm2_count = 0
+        
+        self._session_dm1 = 0
+        self._session_dm2 = 0
+
 
     def get(self, photon: "Photon", **kwargs) -> None:
         """Route an incoming photon to the dataline or monitoring line.
@@ -172,18 +187,25 @@ class QSDetectorCOW(QSDetector):
  
         Called by :class:`MichelsonInterferometer._interfere` immediately
         before routing the photon to ``_receivers[port]``. This is the
-        only place where ``_dm1_count`` and ``_dm2_count`` are incremented,
-        ensuring that isolated photons exiting via the timeout path are
-        excluded from the visibility calculation.
- 
+        only place where counters are incremented, ensuring that isolated
+        photons exiting via the timeout path are excluded from the
+        visibility calculation — matching the paper's definition of
+        p(D_Mj) as "probability that D_Mj fired at a time where only
+        DM1 should have fired" (Eq. 3).
+
+        Both per-burst and session-level counters are incremented.
+        
         Args:
             port (int): receiver index — 0 for DM1 (constructive),
                 1 for DM2 (destructive).
         """
+
         if port == 0:
-            self._dm1_count += 1
+            self._session_dm1 += 1
+
         elif port == 1:
-            self._dm2_count += 1
+            self._session_dm2 += 1
+
 
     # ------------------------------------------------------------------
     # Dataline detection retrieval (compatible with QKDNode.get_bits)
@@ -202,27 +224,50 @@ class QSDetectorCOW(QSDetector):
     # ------------------------------------------------------------------
     # Monitoring line visibility
     # ------------------------------------------------------------------
+        
+    def get_session_visibility(self) -> float:
+        """Compute session-accumulated Michelson fringe visibility.
 
-    def get_monitoring_visibility(self) -> float:
-        """Estimate the Michelson fringe visibility and reset the counters.
-
-        Computes
+        Implements Eq. (3) of Stucki et al. (2005):
 
             V = (n_DM1 − n_DM2) / (n_DM1 + n_DM2)
 
-        from the DM1/DM2 detection counts accumulated since the last call
-        (or since :meth:`init`).
+        where counts are accumulated over the **entire key-generation
+        session** (all bursts since the last :meth:`reset_session_counters`
+        call).  This provides the statistically meaningful estimate that
+        the paper assumes.
+
+        Does NOT reset session counters — call :meth:`reset_session_counters`
+        explicitly at the beginning of each new key-generation run.
 
         Returns:
-            float: visibility V ∈ [−1, 1]; 1.0 when no photons were detected
-            on the monitoring line (undefined case, assumed perfect).
+            float: visibility V ∈ [−1, 1], or ``float('nan')`` if no
+            interference events were recorded in the session.
         """
-        v = MichelsonInterferometer.compute_visibility(
-            self._dm1_count, self._dm2_count
+        return MichelsonInterferometer.compute_visibility(
+            self._session_dm1, self._session_dm2
         )
-        self._dm1_count = 0
-        self._dm2_count = 0
-        return v
+
+    def get_session_counts(self) -> tuple:
+        """Return the raw session-level DM1 and DM2 counts.
+
+        Useful for debugging and external analysis.
+
+        Returns:
+            tuple: (session_dm1, session_dm2).
+        """
+        return (self._session_dm1, self._session_dm2)
+
+    def reset_session_counters(self) -> None:
+        """Reset session-level DM1/DM2 counters.
+
+        Must be called at the beginning of each new key-generation run
+        (before the first burst of that run).  This ensures that
+        :meth:`get_session_visibility` accumulates counts only within
+        one run.
+        """
+        self._session_dm1 = 0
+        self._session_dm2 = 0
 
     def set_phase(self, phase: float) -> None:
         """Adjust the Michelson interferometer phase (temperature tuning).

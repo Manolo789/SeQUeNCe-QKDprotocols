@@ -176,6 +176,7 @@ class MichelsonInterferometer(Entity):
                 stored = self._photon_buffer
                 self._photon_buffer = None
                 self._buffer_time = -1
+                
                 self._interfere(photon, stored)
                 return
 
@@ -242,9 +243,11 @@ class MichelsonInterferometer(Entity):
             getattr(photon, "coherent", True)
             and getattr(stored, "coherent", True)
         )
+        
         if not is_coherent:
             # Fase relativa aleatória → roteamento 50/50
             idx = int(self.get_generator().random() > 0.5)
+            
             if hasattr(self.owner, "record_interference"):
                 self.owner.record_interference(idx)
             self._receivers[idx].get(photon)
@@ -293,10 +296,11 @@ class MichelsonInterferometer(Entity):
                 monitoring window (ideally 0 for perfect coherence).
 
         Returns:
-            float: visibility V ∈ [−1, 1].  Returns 1.0 when both counts
-            are zero (no photons detected — undefined case, assume ideal).
+            float: visibility V ∈ [−1, 1].  Returns ``float('nan')`` when
+            both counts are zero (no interference events detected —
+            visibility is undefined, not assumed ideal).
         """
         total = n_dm1 + n_dm2
         if total == 0:
-            return 1.0
+            return float('nan')
         return (n_dm1 - n_dm2) / total

@@ -701,7 +701,7 @@ class QKDNode(Node):
                     else:
                         bits[index] = -1
         
-        elif encoding == "time_bin_cow": # adequar o nome
+        elif encoding == "time_bin_cow":
             detection_times = qsdetector.get_photon_times()
             bin_sep  = time_bin_cow["bin_separation"]
             

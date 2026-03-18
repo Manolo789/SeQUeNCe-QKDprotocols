@@ -133,8 +133,7 @@ class COW(StackProtocol):
         decoy_rate (float): fraction of symbols that are decoys.
         bit_lists (list[list[int]]): Alice's emitted bits per burst.
         decoy_positions (list[list[int]]): Alice's decoy positions per burst.
-        _pending_bob_indices (list[int]): Bob's detections buffered at Alice.
-        _pending_bob_bits (list[int]): Bob's raw bits buffered at Alice.
+
         key (int): most recent key as integer.
         key_bits (list[int]): accumulated sifted key bits.
         another (COW): partner protocol.
@@ -146,8 +145,8 @@ class COW(StackProtocol):
         sifted_bits_length (list[int]): sifted-key lengths per run.
         throughputs (list[float]): key throughputs in bits/s.
         error_rates (list[float]): QBERs per run.
-        visibility (list[float]): monitoring visibility per burst
-            (Michelson-based when QSDetectorCOW is used).
+        visibility (list[float]): session-accumulated monitoring visibility
+            per generated key (aligned 1:1 with error_rates).
     """
     # Minimum acceptable visibility — below this threshold the protocol
     # should abort (not enforced here; left to higher-layer logic).
@@ -294,6 +293,16 @@ class COW(StackProtocol):
 
             # Invalida cache da basis_list ao mudar light_time
             self._cached_basis_n = 0
+            
+            # FIX: reset session-level visibility counters on Bob's detector
+            # at the start of each key-generation run, so that V is computed
+            # from counts accumulated over all bursts of THIS run only.
+            bob_node = self.another.owner
+            qsd = bob_node.components.get(self.another.qsd_name)
+            if qsd is not None and hasattr(qsd, "reset_session_counters"):
+                qsd.reset_session_counters()
+
+
 
             # send message that photon pulse is beginning, then send bits
             self.start_time = int(self.owner.timeline.now()) + round(self.owner.cchannels[self.another.owner.name].delay)
@@ -425,12 +434,12 @@ class COW(StackProtocol):
             # ---- Read Michelson visibility if QSDetectorCOW is available ----
             qsd = self.owner.components[self.qsd_name]
             if hasattr(qsd, "get_monitoring_visibility"):
-                v = qsd.get_monitoring_visibility()
-                self.visibility.append(v)
-                print(f"Visibility = {v}")
-                log.logger.info(self.name + f" [COW] Michelson visibility = {v:.4f} "+f"(threshold = {self.VISIBILITY_THRESHOLD})")
-                if v < self.VISIBILITY_THRESHOLD:
-                    log.logger.warning(self.name + " [COW] visibility below threshold — "+"possible eavesdropping or interferometer drift!")
+                v_burst = qsd.get_monitoring_visibility()
+                print(f"v_burst: {v_burst}")
+                log.logger.debug(
+                    self.name + f" [COW] burst visibility = {v_burst:.4f}"
+                )
+
 
             self.start_time = self.owner.timeline.now()
 
@@ -545,6 +554,51 @@ class COW(StackProtocol):
                             key_diff &= key_diff - 1
                             num_errors += 1
                         self.error_rates.append(num_errors / self.key_lengths[0])
+                        
+                        # FIX: compute session-accumulated visibility
+                        # aligned 1:1 with the error_rates list, as the
+                        # paper's Eq. (4) requires V and Q to correspond
+                        # to the same key-generation run.
+                        #
+                        # Bob's detector accumulates DM1/DM2 counts across
+                        # all bursts.  We read the session value here and
+                        # store one V per key.
+                        bob_qsd = self.another.owner.components.get(
+                            self.another.qsd_name
+                        )
+                        if bob_qsd is not None and hasattr(bob_qsd, "get_session_visibility"):
+                            v_session = bob_qsd.get_session_visibility()
+                            # Clamp: negative V is a statistical artifact
+                            # with insufficient data; the paper treats it
+                            # as V ≥ 0 (physical visibility).
+                            if math.isnan(v_session):
+                                # No interference events at all — undefined.
+                                # Conservative choice: assume worst case.
+                                v_session = 0.0
+                            v_session = max(0.0, v_session)
+                        else:
+                            v_session = float('nan')
+
+                        self.visibility.append(v_session)
+                        self.another.visibility.append(v_session)
+
+                        dm1, dm2 = (0, 0)
+                        if bob_qsd is not None and hasattr(bob_qsd, "get_session_counts"):
+                            dm1, dm2 = bob_qsd.get_session_counts()
+                        print(f"Session V = {v_session:.4f}  "
+                              f"(DM1={dm1}, DM2={dm2})")
+                        log.logger.info(
+                            self.name +
+                            f" [COW] session visibility = {v_session:.4f}"
+                            f" (DM1={dm1}, DM2={dm2})"
+                        )
+                        if v_session < self.VISIBILITY_THRESHOLD:
+                            log.logger.warning(
+                                self.name + " [COW] session visibility "
+                                "below threshold — possible eavesdropping!"
+                            )
+
+
 
                         self.keys_left_list[0] -= 1
 
