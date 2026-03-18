@@ -431,7 +431,9 @@ class COW(StackProtocol):
             # ── CORREÇÃO: enfileira dados deste burst (não acumula na lista) ──
             self._burst_queue.append((detected_indices, detected_bits))
 
-            # ---- Read Michelson visibility if QSDetectorCOW is available ----
+            # FIX: per-burst visibility logging only (for debug).
+            # The authoritative visibility for R_sk calculation is the
+            # session-accumulated value, read when a key is completed.
             qsd = self.owner.components[self.qsd_name]
             if hasattr(qsd, "get_monitoring_visibility"):
                 v_burst = qsd.get_monitoring_visibility()

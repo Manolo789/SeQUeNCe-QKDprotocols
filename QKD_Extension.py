@@ -15,6 +15,11 @@ import sequence.utils.log as log
 import numpy as np
 import pandas as pd
 
+def safe_log10(lst: list) -> np.ndarray:
+    arr = np.array(lst, dtype=float)
+    arr[arr <= 0] = np.nan
+    return np.log10(arr)
+
 
 def binary_entropy(Q):
     if Q == 0 or Q == 1:
@@ -360,24 +365,9 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s = _collect_cow_metrics(alice.protocol_stack[0], VISIBILITY, ls_params, distance, attenuation)
     
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s, VISIBILITY
-
-# plot_graph (
-#            d_step = step of the distance (in meters),
-#            d_lim = limit distance (in meters)
-#            att_lim = attenuation limit (in dB/meters)
-#            keysize = key size (in number of logical bits)):
-def plot_graph(d_step, d_lim, att_lim, keysize):
     
-    d_list = []
-
-    ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
-    detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
-                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
-    detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
-                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
-                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
-
-
+    
+def sim_variable_distance(d_step, d_lim, channel_parameters, ls_params, detector_params, detector_params_cow, keysize):
     skr_bb84, qber_bb84, throughputs_bb84, latency_bb84, loss_bb84, rs_bb84 = [], [], [], [], [], []
     skr_b92, qber_b92, throughputs_b92, latency_b92, loss_b92, rs_b92 = [], [], [], [], [], []
     skr_cow, qber_cow, throughputs_cow, latency_cow, loss_cow, rs_cow, visibility_cow = [], [], [], [], [], [], []
@@ -385,18 +375,18 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     skr_bb84e, qber_bb84e, throughputs_bb84e, latency_bb84e, loss_bb84e, rs_bb84e = [], [], [], [], [], []
     skr_b92e, qber_b92e, throughputs_b92e, latency_b92e, loss_b92e, rs_b92e = [], [], [], [], [], []
     skr_cowe, qber_cowe, throughputs_cowe, latency_cowe, loss_cowe, rs_cowe, visibility_cowe = [], [], [], [], [], [], []
-    
+    d_list = []
     d = 0
     while d <= d_lim:
         # Sem Eve (Cenário Ideal)
-        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
-        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
-        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=d, attenuation=att_lim, keysize=keysize)
+        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize)
 
         # Com Eve
-        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
-        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=d, attenuation=att_lim, keysize=keysize, source_type="sps")
-        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=d, attenuation=att_lim, keysize=keysize)
+        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize)
         
         d_list.append(d)
         
@@ -411,46 +401,41 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         print()
         print("Simulation "+str((d/d_lim)*100)+'% completed')
         d += d_step
-    
-    def safe_log10(lst: list) -> np.ndarray:
-        arr = np.array(lst, dtype=float)
-        arr[arr <= 0] = np.nan
-        return np.log10(arr)
-
+        
     metrics = {
         "distance":        np.array(d_list),
-        "R_sk-BB84":       safe_log10(skr_bb84),
+        "R_sk-BB84":       np.array(skr_bb84),
         "QBER-BB84":       qber_bb84,
         "Throughputs-BB84": np.array(throughputs_bb84),
         "Latency-BB84": np.array(latency_bb84),
         "Loss-BB84": np.array(loss_bb84),
         "R_s-BB84": np.array(rs_bb84),
-        "R_sk-B92":        safe_log10(skr_b92),
+        "R_sk-B92":        np.array(skr_b92),
         "QBER-B92":        qber_b92,
         "Throughputs-B92": np.array(throughputs_b92),
         "Latency-B92": np.array(latency_b92),
         "Loss-B92": np.array(loss_b92),
         "R_s-B92": np.array(rs_b92),
-        "R_sk-COW":        safe_log10(skr_cow),
+        "R_sk-COW":        np.array(skr_cow),
         "QBER-COW":        qber_cow,
         "Throughputs-COW": np.array(throughputs_cow),
         "Latency-COW": np.array(latency_cow),
         "Loss-COW": np.array(loss_cow),
         "R_s-COW": np.array(rs_cow),
         "Visibility-COW": np.array(visibility_cow),
-        "R_sk-BB84+Eve":   safe_log10(skr_bb84e),
+        "R_sk-BB84+Eve":   np.array(skr_bb84e),
         "QBER-BB84+Eve":   qber_bb84e,
         "Throughputs-BB84+Eve": np.array(throughputs_bb84e),
         "Latency-BB84+Eve": np.array(latency_bb84e),
         "Loss-BB84+Eve": np.array(loss_bb84e),
         "R_s-BB84+Eve": np.array(rs_bb84e),
-        "R_sk-B92+Eve":    safe_log10(skr_b92e),
+        "R_sk-B92+Eve":    np.array(skr_b92e),
         "QBER-B92+Eve":    qber_b92e,
         "Throughputs-B92+Eve": np.array(throughputs_b92e),
         "Latency-B92+Eve": np.array(latency_b92e),
         "Loss-B92+Eve": np.array(loss_b92e),
         "R_s-B92+Eve": np.array(rs_b92e),
-        "R_sk-COW+Eve":    safe_log10(skr_cowe),
+        "R_sk-COW+Eve":    np.array(skr_cowe),
         "QBER-COW+Eve":    qber_cowe,
         "Throughputs-COW+Eve": np.array(throughputs_cowe),
         "Latency-COW+Eve": np.array(latency_cowe),
@@ -458,22 +443,113 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
         "R_s-COW+Eve": np.array(rs_cowe),
         "Visibility-COW+Eve": np.array(visibility_cowe)
     }
-    pd.DataFrame(metrics).to_csv('metrics.csv', index=False)
+    pd.DataFrame(metrics).to_csv('metrics_variable-distance.csv', index=False)
+
+def sim_variable_keysize(keysize_list, channel_parameters, ls_params, detector_params, detector_params_cow):
+    skr_bb84, qber_bb84, throughputs_bb84, latency_bb84, loss_bb84, rs_bb84 = [], [], [], [], [], []
+    skr_b92, qber_b92, throughputs_b92, latency_b92, loss_b92, rs_b92 = [], [], [], [], [], []
+    skr_cow, qber_cow, throughputs_cow, latency_cow, loss_cow, rs_cow, visibility_cow = [], [], [], [], [], [], []
     
+    skr_bb84e, qber_bb84e, throughputs_bb84e, latency_bb84e, loss_bb84e, rs_bb84e = [], [], [], [], [], []
+    skr_b92e, qber_b92e, throughputs_b92e, latency_b92e, loss_b92e, rs_b92e = [], [], [], [], [], []
+    skr_cowe, qber_cowe, throughputs_cowe, latency_cowe, loss_cowe, rs_cowe, visibility_cowe = [], [], [], [], [], [], []
+
+    for k in keysize_list:
+        # Sem Eve (Cenário Ideal)
+        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k)
+
+        # Com Eve
+        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k)
+        
+        d_list.append(d)
+        
+        skr_bb84.append(SECRET_KEY_RATE_BB84); qber_bb84.append(np.mean(QBER_BB84)); throughputs_bb84.append(THROUGHPUTS_BB84); latency_bb84.append(LATENCY_BB84); loss_bb84.append(LOSS_BB84); rs_bb84.append(RS_BB84)
+        skr_b92.append(SECRET_KEY_RATE_B92); qber_b92.append(np.mean(QBER_B92)); throughputs_b92.append(THROUGHPUTS_B92); latency_b92.append(LATENCY_B92); loss_b92.append(LOSS_B92); rs_b92.append(RS_B92)
+        skr_cow.append(SECRET_KEY_RATE_COW); qber_cow.append(np.mean(QBER_COW)); throughputs_cow.append(THROUGHPUTS_COW); latency_cow.append(LATENCY_COW); loss_cow.append(LOSS_COW); rs_cow.append(RS_COW); visibility_cow.append(np.mean(VISIBILITY_COW))
+        
+        skr_bb84e.append(SECRET_KEY_RATE_BB84e); qber_bb84e.append(np.mean(QBER_BB84e)); throughputs_bb84e.append(THROUGHPUTS_BB84e); latency_bb84e.append(LATENCY_BB84e); loss_bb84e.append(LOSS_BB84e); rs_bb84e.append(RS_BB84e)
+        skr_b92e.append(SECRET_KEY_RATE_B92e); qber_b92e.append(np.mean(QBER_B92e)); throughputs_b92e.append(THROUGHPUTS_B92e); latency_b92e.append(LATENCY_B92e); loss_b92e.append(LOSS_B92e); rs_b92e.append(RS_B92e)
+        skr_cowe.append(SECRET_KEY_RATE_COWe); qber_cowe.append(np.mean(QBER_COWe)); throughputs_cowe.append(THROUGHPUTS_COWe); latency_cowe.append(LATENCY_COWe); loss_cowe.append(LOSS_COWe); rs_cowe.append(RS_COWe); visibility_cowe.append(np.mean(VISIBILITY_COWe))
+        
+        print()
+        print("Simulation "+str((k/keysize_list[-1])*100)+'% completed')
+        
+    metrics = {
+        "keysize":        np.array(keysize_list),
+        "R_sk-BB84":       np.array(skr_bb84),
+        "QBER-BB84":       qber_bb84,
+        "Throughputs-BB84": np.array(throughputs_bb84),
+        "Latency-BB84": np.array(latency_bb84),
+        "Loss-BB84": np.array(loss_bb84),
+        "R_s-BB84": np.array(rs_bb84),
+        "R_sk-B92":        np.array(skr_b92),
+        "QBER-B92":        qber_b92,
+        "Throughputs-B92": np.array(throughputs_b92),
+        "Latency-B92": np.array(latency_b92),
+        "Loss-B92": np.array(loss_b92),
+        "R_s-B92": np.array(rs_b92),
+        "R_sk-COW":        np.array(skr_cow),
+        "QBER-COW":        qber_cow,
+        "Throughputs-COW": np.array(throughputs_cow),
+        "Latency-COW": np.array(latency_cow),
+        "Loss-COW": np.array(loss_cow),
+        "R_s-COW": np.array(rs_cow),
+        "Visibility-COW": np.array(visibility_cow),
+        "R_sk-BB84+Eve":   np.array(skr_bb84e),
+        "QBER-BB84+Eve":   qber_bb84e,
+        "Throughputs-BB84+Eve": np.array(throughputs_bb84e),
+        "Latency-BB84+Eve": np.array(latency_bb84e),
+        "Loss-BB84+Eve": np.array(loss_bb84e),
+        "R_s-BB84+Eve": np.array(rs_bb84e),
+        "R_sk-B92+Eve":    np.array(skr_b92e),
+        "QBER-B92+Eve":    qber_b92e,
+        "Throughputs-B92+Eve": np.array(throughputs_b92e),
+        "Latency-B92+Eve": np.array(latency_b92e),
+        "Loss-B92+Eve": np.array(loss_b92e),
+        "R_s-B92+Eve": np.array(rs_b92e),
+        "R_sk-COW+Eve":    np.array(skr_cowe),
+        "QBER-COW+Eve":    qber_cowe,
+        "Throughputs-COW+Eve": np.array(throughputs_cowe),
+        "Latency-COW+Eve": np.array(latency_cowe),
+        "Loss-COW+Eve": np.array(loss_cowe),
+        "R_s-COW+Eve": np.array(rs_cowe),
+        "Visibility-COW+Eve": np.array(visibility_cowe)
+    }
+    pd.DataFrame(metrics).to_csv('metrics_variable-keysize.csv', index=False)
+
+def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title):
+    """ Function that generates the graphs.
+
+    Attributes:
+        skr = [skr_list_bb84, skr_list_b92, skr_list_cow]
+        skr_Eve = [skr_list_bb84_Eve, skr_list_b92_Eve, skr_list_cow_Eve]
+        qber = [qber_list_bb84, qber_list_b92, qber_list_cow]
+        qber_Eve = [qber_list_bb84_Eve, qber_list_b92_Eve, qber_list_cow_Eve]
+        rs = [rs_list_bb84, rs_list_b92, rs_list_cow]
+        rs_Eve = [rs_list_bb84_Eve, rs_list_b92_Eve, rs_list_cow_Eve]
+        x_list: List of values ​​for the X-axis. In this simulation, it could be the distance or the key size.
+        x_label: X-axis label ("Distance (d) [m]")
+        title: f"Aten.={att_lim} dB/m, Keysize={keysize} bits" | f"Aten.={att_lim} dB/m, Distance={distance} meters"
+    """
     # display our collected metrics
     # Ideal scenario
+    # R_sk(x) and QBER(x)
     fig, ax1 = plt.subplots(figsize=(14, 5))
-    linha_y1, = ax1.plot(np.array(d_list), safe_log10(skr_bb84), linestyle='-', color='blue', label="R_sk(d) of the BB84")
-    linha_y2, = ax1.plot(np.array(d_list), safe_log10(skr_b92), linestyle='-', color='red', label="R_sk(d) of the B92")
-    linha_y3, = ax1.plot(np.array(d_list), safe_log10(skr_cow), linestyle='-', color='green', label="R_sk(d) of the COW")
-    ax1.set_xlabel("Distance (d) [m]")
+    linha_y1, = ax1.plot(np.array(x_list), safe_log10(skr[0]), linestyle='-', color='blue', label="R_sk of the BB84")
+    linha_y2, = ax1.plot(np.array(x_list), safe_log10(skr[1]), linestyle='-', color='red', label="R_sk of the B92")
+    linha_y3, = ax1.plot(np.array(x_list), safe_log10(skr[2]), linestyle='-', color='green', label="R_sk of the COW")
+    ax1.set_xlabel(x_label)
     ax1.set_ylabel("log₁₀ Secret Key Rate (R_sk) [bits per sent qubit]")
-    ax1.set_title(f"Aten.={att_lim} dB/m, Keysize={keysize} bits")
+    ax1.set_title(title)
 
     ax2 = ax1.twinx()
-    linha_z1, = ax2.plot(np.array(d_list), qber_bb84, linestyle='--', color='orange', label="QBER(d) of the BB84")
-    linha_z2, = ax2.plot(np.array(d_list), qber_b92, linestyle='--', color='yellow', label="QBER(d) of the B92")
-    linha_z3, = ax2.plot(np.array(d_list), qber_cow, linestyle='--', color='black', label="QBER(d) of the COW")
+    linha_z1, = ax2.plot(np.array(x_list), qber[0], linestyle='--', color='orange', label="QBER of the BB84")
+    linha_z2, = ax2.plot(np.array(x_list), qber[1], linestyle='--', color='yellow', label="QBER of the B92")
+    linha_z3, = ax2.plot(np.array(x_list), qber[2], linestyle='--', color='black', label="QBER of the COW")
     ax2.set_ylabel("QBER")
 
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3]
@@ -483,19 +559,37 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
     plt.savefig("graph-ideal_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Scenario with Eve
+    # R_s(x)
     fig, ax1 = plt.subplots(figsize=(14, 5))
-    linha_y1, = ax1.plot(np.array(d_list), safe_log10(skr_bb84e), linestyle='-', color='blue', label="R_sk(d) of the BB84+Eve")
-    linha_y2, = ax1.plot(np.array(d_list), safe_log10(skr_b92e), linestyle='-', color='red', label="R_sk(d) of the B92+Eve")
-    linha_y3, = ax1.plot(np.array(d_list), safe_log10(skr_cowe), linestyle='-', color='green', label="R_sk(d) of the COW+Eve")
-    ax1.set_xlabel("Distance (d) [m]")
+    linha_y1, = ax1.plot(np.array(x_list), np.array(rs[0])*100, linestyle='-', color='blue', label="BB84")
+    linha_y2, = ax1.plot(np.array(x_list), np.array(rs[1])*100, linestyle='-', color='red', label="B92")
+    linha_y3, = ax1.plot(np.array(x_list), np.array(rs[2])*100, linestyle='-', color='green', label="COW")
+    ax1.set_xlabel(x_label)
+    ax1.set_ylabel("R_s - Useful bit rate [%]")
+    ax1.set_title(title)
+
+    linhas = [linha_y1, linha_y2, linha_y3]
+    labels = [l.get_label() for l in linhas]
+    ax1.legend(linhas, labels, loc="best")
+
+    plt.savefig("graph-ideal_scenario-R_s.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+    # Scenario with Eve
+    # R_sk(x) and QBER(x)
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    linha_y1, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[0]), linestyle='-', color='blue', label="R_sk of the BB84+Eve")
+    linha_y2, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[1]), linestyle='-', color='red', label="R_sk of the B92+Eve")
+    linha_y3, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[2]), linestyle='-', color='green', label="R_sk of the COW+Eve")
+    ax1.set_xlabel(x_label)
     ax1.set_ylabel("log₁₀ Secret Key Rate (R_sk) [bits per sent qubit]")
-    ax1.set_title(f"Aten.={att_lim} dB/m, Keysize={keysize} bits")
+    ax1.set_title(title)
 
     ax2 = ax1.twinx()
-    linha_z1, = ax2.plot(np.array(d_list), qber_bb84e, linestyle='--', color='orange', label="QBER(d) of the BB84+Eve")
-    linha_z2, = ax2.plot(np.array(d_list), qber_b92e, linestyle='--', color='yellow', label="QBER(d) of the B92+Eve")
-    linha_z3, = ax2.plot(np.array(d_list), qber_cowe, linestyle='--', color='black', label="QBER(d) of the COW+Eve")
+    linha_z1, = ax2.plot(np.array(x_list), qber_Eve[0], linestyle='--', color='orange', label="QBER of the BB84+Eve")
+    linha_z2, = ax2.plot(np.array(x_list), qber_Eve[1], linestyle='--', color='yellow', label="QBER of the B92+Eve")
+    linha_z3, = ax2.plot(np.array(x_list), qber_Eve[2], linestyle='--', color='black', label="QBER of the COW+Eve")
     ax2.set_ylabel("QBER")
 
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3]
@@ -504,9 +598,58 @@ def plot_graph(d_step, d_lim, att_lim, keysize):
 
     plt.savefig("graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # R_s(x)
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    linha_y1, = ax1.plot(np.array(x_list), np.array(rs_Eve[0])*100, linestyle='-', color='blue', label="BB84+Eve")
+    linha_y2, = ax1.plot(np.array(x_list), np.array(rs_Eve[1])*100, linestyle='-', color='red', label="B92+Eve")
+    linha_y3, = ax1.plot(np.array(x_list), np.array(rs_Eve[2])*100, linestyle='-', color='green', label="COW+Eve")
+    ax1.set_xlabel(x_label)
+    ax1.set_ylabel("R_s - Useful bit rate [%]")
+    ax1.set_title(title)
+
+    linhas = [linha_y1, linha_y2, linha_y3]
+    labels = [l.get_label() for l in linhas]
+    ax1.legend(linhas, labels, loc="best")
+
+    plt.savefig("graph-Eve_scenario-R_s.png", dpi=300, bbox_inches='tight')
+    plt.close()
 
 def run_simulation():
-    plot_graph(d_step=100, d_lim=10000, att_lim=0.0002, keysize=100)
+    ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
+    detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
+                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
+    detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
+                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
+                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
+    keysize = 10000
+    # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
+    channel_parameters = (700, 0.0002, 0.97)
+    sim_variable_distance(d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize)
+    sim_variable_keysize(keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000], channel_parameters, ls_params, detector_params, detector_params_cow):
+    
+    
+    df_d = pd.read_csv('metrics_variable-distance.csv')
+    df_k = pd.read_csv('metrics_variable-keysize.csv')
+    
+    
+    
+    plot_graph(skr=[df_d["R_sk-BB84"], df_d["R_sk-B92"], df_d["R_sk-COW"]], 
+           skr_Eve=[df_d["R_sk-BB84+Eve"], df_d["R_sk-B92+Eve"], df_d["R_sk-COW+Eve"]], 
+           qber=[df_d["QBER-BB84"], df_d["QBER-B92"], df_d["QBER-COW"]], 
+           qber_Eve=[df_d["QBER-BB84+Eve"], df_d["QBER-B92+Eve"], df_d["QBER-COW+Eve"]], 
+           rs=[df_d["R_s-BB84"], df_d["R_s-B92"], df_d["R_s-COW"]], 
+           rs_Eve=[df_d["R_s-BB84+Eve"], df_d["R_s-B92+Eve"], df_d["R_s-COW+Eve"]], 
+           x_list=df_d["distance"], 
+           x_label="Distance (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Keysize={keysize} bits")
+    plot_graph(skr=[df_k["R_sk-BB84"], df_k["R_sk-B92"], df_k["R_sk-COW"]], 
+           skr_Eve=[df_k["R_sk-BB84+Eve"], df_k["R_sk-B92+Eve"], df_k["R_sk-COW+Eve"]], 
+           qber=[df_k["QBER-BB84"], df_k["QBER-B92"], df_k["QBER-COW"]], 
+           qber_Eve=[df_k["QBER-BB84+Eve"], df_k["QBER-B92+Eve"], df_k["QBER-COW+Eve"]], 
+           rs=[df_k["R_s-BB84"], df_k["R_s-B92"], df_k["R_s-COW"]], 
+           rs_Eve=[df_k["R_s-BB84+Eve"], df_k["R_s-B92+Eve"], df_k["R_s-COW+Eve"]], 
+           x_list=df_k["keysize"], 
+           x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters")
 
 if __name__ == "__main__":
     run_simulation()
