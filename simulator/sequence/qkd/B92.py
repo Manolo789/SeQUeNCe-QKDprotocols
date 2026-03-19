@@ -400,7 +400,7 @@ class B92(StackProtocol):
                 # parse alice basis list
                 basis_list_alice = msg.bases
 
-                # compare own basis with basis message and create list of matching indices
+                # Compare the base itself with the bit list and create a list of corresponding indices
                 indices = []
                 basis_list = self.basis_lists.pop(0)
                 bits = self.bit_lists.pop(0)
