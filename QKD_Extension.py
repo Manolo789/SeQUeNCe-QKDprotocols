@@ -46,7 +46,7 @@ def _collect_metrics(protocol, distance: float, attenuation: float):
     
     for i, e in enumerate(QBER):
         R_s = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        secret_key_rate_mean += R_s * (1 - binary_entropy(e))
+        secret_key_rate_mean += max(0.0, R_s * (1 - 2*binary_entropy(e)))
         R_s_list.append(R_s)
     SECRET_KEY_RATE = secret_key_rate_mean/len(QBER)
     mean_R_s = np.mean(np.array(R_s_list, dtype=float))
@@ -513,7 +513,7 @@ def _worker_keysize(task: dict):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params,
-                          detector_params, detector_params_cow, keysize):
+                          detector_params, detector_params_cow, keysize, key_num):
     """Build a flat list of task dicts for every (protocol × distance) pair."""
     att  = channel_parameters[1]
     pfid = channel_parameters[2]
@@ -521,7 +521,7 @@ def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params,
 
     for d in d_list:
         common = dict(runtime=runtime, distance=d,
-                      polarization_fidelity=pfid, attenuation=att, keysize=keysize)
+                      polarization_fidelity=pfid, attenuation=att, keysize=keysize, key_num=key_num)
 
         tasks.append({"protocol": "BB84", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params,
@@ -554,7 +554,7 @@ def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params,
 
 
 def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params,
-                         detector_params, detector_params_cow):
+                         detector_params, detector_params_cow, key_num):
     """Build a flat list of task dicts for every (protocol × keysize) pair."""
     dist = channel_parameters[0]
     att  = channel_parameters[1]
@@ -563,7 +563,7 @@ def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params,
 
     for k in keysize_list:
         common = dict(runtime=runtime, distance=dist,
-                      polarization_fidelity=pfid, attenuation=att, keysize=k)
+                      polarization_fidelity=pfid, attenuation=att, keysize=k, key_num=key_num)
 
         tasks.append({"protocol": "BB84", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params,
@@ -677,7 +677,7 @@ def _collect_keysize_results(keysize_list, results_list):
 
 def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
                           ls_params, detector_params, detector_params_cow,
-                          keysize, max_workers=None):
+                          keysize, key_num, max_workers=None):
     """Parallel version of the original sim_variable_distance.
 
     Args:
@@ -687,17 +687,11 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
     if max_workers is None:
         max_workers = os.cpu_count() or 4
 
-    d_list = []
-    d = d_step
-    while d <= d_lim:
-
-        d_list.append(d)
-        
-        d += d_step
+    d_list = list(range(d_step, d_lim + 1, d_step))
         
     tasks = _build_distance_tasks(
         runtime, d_list, channel_parameters,
-        ls_params, detector_params, detector_params_cow, keysize)
+        ls_params, detector_params, detector_params_cow, keysize, key_num)
 
     total = len(tasks)
     results_list = []
@@ -734,7 +728,7 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
     print("[parallel] Saved metrics_variable-distance.csv")
 
 def sim_variable_keysize(runtime, keysize_list, channel_parameters,
-                         ls_params, detector_params, detector_params_cow,
+                         ls_params, detector_params, detector_params_cow, key_num,
                          max_workers=None):
     """Parallel version of the original sim_variable_keysize."""
     if max_workers is None:
@@ -742,7 +736,7 @@ def sim_variable_keysize(runtime, keysize_list, channel_parameters,
 
     tasks = _build_keysize_tasks(
         runtime, keysize_list, channel_parameters,
-        ls_params, detector_params, detector_params_cow)
+        ls_params, detector_params, detector_params_cow, key_num)
 
     total = len(tasks)
     results_list = []
@@ -881,10 +875,11 @@ def run_simulation():
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
     keysize = 10000
+    key_num = 1
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
-    sim_variable_distance(runtime=200, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize)
-    sim_variable_keysize(runtime=200, keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000], channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow)
+    sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num)
+    sim_variable_keysize(runtime=1000, keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num)
     
     
     df_d = pd.read_csv('metrics_variable-distance.csv')
