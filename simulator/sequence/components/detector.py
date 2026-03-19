@@ -46,12 +46,19 @@ class Detector(Entity):
         time_resolution (int): minimum resolving power of photon arrival time (in ps).
         next_detection_time (int): time of next possible detection event.
         photon_counter (int): counts number of detection events.
+        afterpulse_prob (float): probability of an afterpulse following a
+            real detection event (default 0.0).  Typical values for InGaAs
+            SPDs: 0.01–0.05.
+        afterpulse_time (int): maximum time window (in ps) after a detection
+            in which an afterpulse can occur (default 0).  The afterpulse
+            time is drawn uniformly from [0, afterpulse_time].
+
     """
 
     _meas_circuit = Circuit(1)
     _meas_circuit.measure(0)
 
-    def __init__(self, name: str, timeline: "Timeline", efficiency: float = 0.9, dark_count: float = 0, count_rate: float = 25e6, time_resolution: int = 150):
+    def __init__(self, name: str, timeline: "Timeline", efficiency: float = 0.9, dark_count: float = 0, count_rate: float = 25e6, time_resolution: int = 150, afterpulse_prob: float = 0.0, afterpulse_time: int = 0):
         Entity.__init__(self, name, timeline)  # Detector is part of the QSDetector, and does not have its own name
         self.efficiency = efficiency
         self.dark_count = dark_count  # measured in 1/s
@@ -59,6 +66,10 @@ class Detector(Entity):
         self.time_resolution = time_resolution  # measured in ps
         self.next_detection_time = -1
         self.photon_counter = 0
+        
+        # Afterpulse parameters
+        self.afterpulse_prob = afterpulse_prob
+        self.afterpulse_time = afterpulse_time
 
     def init(self):
         """Implementation of Entity interface (see base class)."""
@@ -119,6 +130,9 @@ class Detector(Entity):
 
         Will calculate if detection succeeds (by checking if we have passed `next_detection_time`)
         and will notify observers with the detection time (rounded to the nearest multiple of detection frequency).
+
+        NOISE FIX: After a successful detection, schedule an afterpulse
+        with probability afterpulse_prob within [0, afterpulse_time] ps.
         """
 
         now = self.timeline.now()
@@ -129,6 +143,22 @@ class Detector(Entity):
             self.notify({'time': time})
             period = int(ceil(mpfr("1e12") / mpfr(self.count_rate))) # period in ps
             self.next_detection_time = now + period
+            
+            # ── Afterpulse scheduling ──
+            # After a real detection, with probability afterpulse_prob,
+            # a false detection occurs within afterpulse_time ps.
+            # This models trapped-charge release in InGaAs SPDs.
+            if (self.afterpulse_prob > 0
+                    and self.afterpulse_time > 0
+                    and self.get_generator().random() < self.afterpulse_prob):
+                ap_delay = int(self.get_generator().uniform(
+                    0, self.afterpulse_time))
+                ap_time = now + ap_delay
+                process = Process(self, "record_detection", [])
+                event = Event(ap_time, process)
+                self.timeline.schedule(event)
+
+
 
     def notify(self, info: dict[str, Any]):
         """Custom notify function (calls `trigger` method)."""

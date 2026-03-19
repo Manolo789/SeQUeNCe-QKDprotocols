@@ -119,6 +119,9 @@ class QSDetectorCOW(QSDetector):
             d.attach(self)
 
         self.trigger_times: list[list[int]] = [[], [], []]
+        self._dm1_count: int = 0
+        self._dm2_count: int = 0
+
 
         
         # Session-level counters — accumulated across all bursts within
@@ -146,6 +149,9 @@ class QSDetectorCOW(QSDetector):
         for d in self.detectors:
             d.init()
         self.trigger_times = [[], [], []]
+        self._dm1_count = 0
+        self._dm2_count = 0
+
         
         self._session_dm1 = 0
         self._session_dm2 = 0
@@ -201,10 +207,12 @@ class QSDetectorCOW(QSDetector):
         """
 
         if port == 0:
+            self._dm1_count += 1
             self._session_dm1 += 1
-
         elif port == 1:
+            self._dm2_count += 1
             self._session_dm2 += 1
+
 
 
     # ------------------------------------------------------------------
@@ -224,6 +232,12 @@ class QSDetectorCOW(QSDetector):
     # ------------------------------------------------------------------
     # Monitoring line visibility
     # ------------------------------------------------------------------
+    def get_monitoring_visibility(self) -> float:
+        v = MichelsonInterferometer.compute_visibility(
+            self._dm1_count, self._dm2_count)
+        self._dm1_count = 0
+        self._dm2_count = 0
+        return v
         
     def get_session_visibility(self) -> float:
         """Compute session-accumulated Michelson fringe visibility.

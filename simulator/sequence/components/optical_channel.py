@@ -3,9 +3,18 @@
 This module introduces the abstract OpticalChannel class for general optical fibers.
 It also defines the QuantumChannel class for transmission of qubits/photons and the ClassicalChannel class for transmission of classical control messages.
 OpticalChannels must be attached to nodes on both ends.
+
+
+NOISE FIX: Added channel phase decoherence for time_bin_cow encoding.
+Each photon traversing the fiber accumulates a random phase drawn from
+N(0, σ²) where σ depends on the fiber length.  This phase is stored
+in photon.channel_phase and is used by the Michelson interferometer
+to compute the relative phase between two consecutive pulses.
+
 """
 
 import heapq as hq
+import math
 import gmpy2
 from typing import TYPE_CHECKING, Optional
 
@@ -84,10 +93,16 @@ class QuantumChannel(OpticalChannel):
         loss (float): loss rate for transmitted photons (determined by attenuation).
         delay (int): delay (in ps) of photon transmission (determined by light speed, distance).
         frequency (float): maximum frequency of qubit transmission (in Hz).
+        phase_noise_coefficient (float): standard deviation of phase noise per
+            sqrt(meter) of fiber (in rad/sqrt(m)).  The total phase std-dev
+            for a channel of length L is σ_φ = phase_noise_coefficient × √L.
+            Default 0.0 (no channel phase noise).
+            Typical value: 0.005–0.02 rad/√m for standard telecom fiber.
+
     """
 
     def __init__(self, name: str, timeline: "Timeline", attenuation: float, distance: float,
-                 polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e7):
+                 polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, phase_noise_coefficient: float = 0.0):
         """Constructor for Quantum Channel class.
 
         Args:
@@ -100,6 +115,8 @@ class QuantumChannel(OpticalChannel):
             delay (int): delay (in ps) of photon transmission (determined by light speed, distance).
             loss (float): loss rate for transmitted photons (determined by attenuation).
             frequency (float): maximum frequency of qubit transmission (in Hz) (default 8e7).
+            phase_noise_coefficient (float): phase noise per sqrt(m) (default 0.0).
+
         """
 
         super().__init__(name, timeline, attenuation, distance, polarization_fidelity, light_speed)
@@ -107,6 +124,8 @@ class QuantumChannel(OpticalChannel):
         self.loss: float = 1
         self.frequency: float = frequency  # maximum frequency for sending qubits (measured in Hz)
         self.send_bins: list = []
+        self.phase_noise_coefficient: float = phase_noise_coefficient
+
 
     def init(self) -> None:
         """Implementation of Entity interface (see base class)."""
@@ -128,6 +147,42 @@ class QuantumChannel(OpticalChannel):
         self.sender = sender
         self.receiver = receiver
         sender.assign_qchannel(self, receiver)
+        
+    def _apply_channel_noise(self, qubit: "Photon") -> None:
+        """Apply channel-level noise to a photon being transmitted.
+
+        For polarization encoding: existing random_noise (flips state).
+        For time_bin_cow encoding: random phase noise that degrades
+        coherence between consecutive pulses in the Michelson
+        interferometer on the monitoring line.
+
+        The phase noise model follows a Wiener process in fiber:
+            σ_φ = phase_noise_coefficient × √(distance)
+
+        This phase is stored in photon.channel_phase and is read by
+        MichelsonInterferometer._interfere() to compute the interference
+        visibility.
+
+        Args:
+            qubit (Photon): photon being transmitted.
+        """
+        rng = self.sender.get_generator()
+
+        if qubit.encoding_type["name"] == "polarization":
+            if rng.random() > self.polarization_fidelity:
+                qubit.random_noise(self.get_generator())
+
+        elif qubit.encoding_type["name"] == "time_bin_cow":
+            # Channel phase decoherence: each photon accumulates a random
+            # phase proportional to sqrt(fiber length).
+            # This does NOT affect the data line (time-of-arrival is
+            # phase-independent), but it DOES reduce the visibility
+            # measured by the Michelson interferometer.
+            if self.phase_noise_coefficient > 0 and self.distance > 0:
+                sigma_phi = self.phase_noise_coefficient * math.sqrt(self.distance)
+                qubit.channel_phase = float(rng.normal(0.0, sigma_phi))
+
+
 
     def transmit(self, qubit: "Photon", source: "Node") -> None:
         """Method to transmit photon-encoded qubits.
@@ -173,10 +228,12 @@ class QuantumChannel(OpticalChannel):
 
             if qubit.is_null:
                 qubit.add_loss(self.loss)
+                
+            
 
-            # check if polarization encoding and apply necessary noise
-            if qubit.encoding_type["name"] == "polarization" and self.sender.get_generator().random() > self.polarization_fidelity:
-                qubit.random_noise(self.get_generator())
+            # ── Apply channel noise (polarization OR phase decoherence) ──
+            self._apply_channel_noise(qubit)
+
 
             # schedule receiving node to receive photon at future time determined by light speed
             future_time = self.timeline.now() + self.delay
@@ -275,7 +332,7 @@ class EveQuantumChannel(QuantumChannel):
     """
 
     def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
-        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e7, eve_position: float = 0.5) -> None:
+        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0) -> None:
         """
         Args:
             name:                 nome do canal.
@@ -297,6 +354,7 @@ class EveQuantumChannel(QuantumChannel):
             polarization_fidelity=polarization_fidelity,
             light_speed=light_speed,
             frequency=frequency,
+            phase_noise_coefficient=phase_noise_coefficient,
         )
         self.eve_node: "EveNode" = eve_node
         self.eve_position: float = eve_position
@@ -336,6 +394,7 @@ class EveQuantumChannel(QuantumChannel):
             polarization_fidelity=self.polarization_fidelity,
             light_speed=self.light_speed,
             frequency=self.frequency,
+            phase_noise_coefficient=self.phase_noise_coefficient,
         )
         # Registra _seg2 em Eve com a chave 'bob'.
         # Eve chamará eve.send_qubit('bob') após intercepção.
@@ -387,10 +446,10 @@ class EveQuantumChannel(QuantumChannel):
         elif (self.sender.get_generator().random() > self.loss) or qubit.is_null:
             if qubit.is_null:
                 qubit.add_loss(self.loss)
-            if (qubit.encoding_type["name"] == "polarization"
-                    and self.sender.get_generator().random()
-                    > self.polarization_fidelity):
-                qubit.random_noise(self.get_generator())
+
+            # Apply channel noise for segment 1 (Alice → Eve)
+            self._apply_channel_noise(qubit)
+
 
             self._schedule_to_eve(qubit, source)
         # fóton perdido: não agenda nada

@@ -191,7 +191,7 @@ def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, dist
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
 
-def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf):
+def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20):
     tl = Timeline(runtime*1e9)
     tl.show_progress = False
 
@@ -203,8 +203,8 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
         #log.track_module('timeline')
         log.track_module('light_source')
 
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient)
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
     cc0.delay += 1e9  # 1 ms
@@ -224,6 +224,14 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
     for i in range(len(detector_params)):
         for name, param in detector_params[i].items():
             bob.update_detector_params(i, name, param)
+            
+    # ── Set interferometer phase error (Source B) ──
+    # Access QSDetectorCOW and set its interferometer phase_error
+    from sequence.components.qsdetector_cow import QSDetectorCOW
+    for comp in bob.components.values():
+        if isinstance(comp, QSDetectorCOW):
+            comp.interferometer.phase_error = interferometer_phase_error
+            break
 
     qc0.set_ends(alice, bob.name)
     qc1.set_ends(bob, alice.name)
@@ -328,7 +336,7 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     tl.run()
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
-def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 1.0, eve_position = 0.5):
+def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20, eve_intercept_rate = 1.0, eve_position = 0.5):
     tl = Timeline(runtime * 1e9)
     tl.show_progress = False
     if log_filename != -1:
@@ -338,8 +346,8 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
         log.track_module('light_source')
 
     eve = EveNode("eve", tl, encoding=time_bin_cow, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, phase_noise_coefficient=phase_noise_coefficient)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient)
     
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
@@ -356,6 +364,14 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     for i, dp in enumerate(detector_params):
         for name, param in dp.items():
             bob.update_detector_params(i, name, param)
+            
+    # ── Set interferometer phase error (Source B) ──
+    # Access QSDetectorCOW and set its interferometer phase_error
+    from sequence.components.qsdetector_cow import QSDetectorCOW
+    for comp in bob.components.values():
+        if isinstance(comp, QSDetectorCOW):
+            comp.interferometer.phase_error = interferometer_phase_error
+            break
 
     qc0.set_ends(alice, bob.name)
     qc1.set_ends(bob, alice.name)
@@ -773,7 +789,7 @@ def sim_variable_keysize(runtime, keysize_list, channel_parameters,
     print("[parallel] Saved metrics_variable-keysize.csv")
 
 
-def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title):
+def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title, filename):
     """ Function that generates the graphs.
 
     Attributes:
@@ -807,8 +823,9 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title)
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3]
     labels = [l.get_label() for l in linhas]
     ax1.legend(linhas, labels, loc="best")
-
-    plt.savefig("graph-ideal_scenario.png", dpi=300, bbox_inches='tight')
+    
+    plt.grid(True)
+    plt.savefig(f"{filename}_graph-ideal_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # R_s(x)
@@ -824,7 +841,8 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title)
     labels = [l.get_label() for l in linhas]
     ax1.legend(linhas, labels, loc="best")
 
-    plt.savefig("graph-ideal_scenario-R_s.png", dpi=300, bbox_inches='tight')
+    plt.grid(True)
+    plt.savefig(f"{filename}_graph-ideal_scenario-R_s.png", dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -848,7 +866,8 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title)
     labels = [l.get_label() for l in linhas]
     ax1.legend(linhas, labels, loc="best")
 
-    plt.savefig("graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
+    plt.grid(True)
+    plt.savefig(f"{filename}_graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # R_s(x)
@@ -864,10 +883,16 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title)
     labels = [l.get_label() for l in linhas]
     ax1.legend(linhas, labels, loc="best")
 
-    plt.savefig("graph-Eve_scenario-R_s.png", dpi=300, bbox_inches='tight')
+    plt.grid(True)
+    plt.savefig(f"{filename}_graph-Eve_scenario-R_s.png", dpi=300, bbox_inches='tight')
     plt.close()
 
 def run_simulation():
+    # Source A: channel phase noise
+    # σ_φ = 0.01 × √1000 ≈ 0.32 rad → V reduced by channel
+    # Source B: interferometer thermal noise
+    # σ = 0.20 rad → V ≈ 98% (matches paper V_net)
+
     ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
     detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
@@ -894,7 +919,7 @@ def run_simulation():
            rs=[df_d["R_s-BB84"], df_d["R_s-B92"], df_d["R_s-COW"]], 
            rs_Eve=[df_d["R_s-BB84+Eve"], df_d["R_s-B92+Eve"], df_d["R_s-COW+Eve"]], 
            x_list=df_d["distance"], 
-           x_label="Distance (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Keysize={keysize} bits")
+           x_label="Distance (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Keysize={keysize} bits", "distance")
     plot_graph(skr=[df_k["R_sk-BB84"], df_k["R_sk-B92"], df_k["R_sk-COW"]], 
            skr_Eve=[df_k["R_sk-BB84+Eve"], df_k["R_sk-B92+Eve"], df_k["R_sk-COW+Eve"]], 
            qber=[df_k["QBER-BB84"], df_k["QBER-B92"], df_k["QBER-COW"]], 
@@ -902,7 +927,7 @@ def run_simulation():
            rs=[df_k["R_s-BB84"], df_k["R_s-B92"], df_k["R_s-COW"]], 
            rs_Eve=[df_k["R_s-BB84+Eve"], df_k["R_s-B92+Eve"], df_k["R_s-COW+Eve"]], 
            x_list=df_k["keysize"], 
-           x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters")
+           x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters", "keysize")
 
 if __name__ == "__main__":
     run_simulation()

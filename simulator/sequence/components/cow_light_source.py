@@ -53,14 +53,12 @@ from ..utils.encoding_cow import VACUUM_STATE, time_bin_cow
 class COWLightSource(LightSource):
     """Weak-coherent-pulse source for the COW QKD protocol.
 
-    Extends :class:`LightSource` so that the sentinel ``VACUUM_STATE``
-    (``None``) in the state list causes a deterministic vacuum slot: the
-    clock advances by one period but no photon object is created or
-    transmitted.  Every non-``None`` entry is treated exactly as in the
-    parent class (Poisson draw with ``mean_photon_num``).
-
     Attributes:
-        (inherits all attributes from LightSource)
+        extinction_ratio (float): intensity modulator extinction ratio
+            (linear, not dB).  Default 0 means perfect extinction (no
+            leakage in vacuum slots).
+            Typical value: 100–1000 (20–30 dB).
+            Set to e.g. 100 for ER = 20 dB, or 1000 for ER = 30 dB.
     """
 
     def __init__(
@@ -73,6 +71,7 @@ class COWLightSource(LightSource):
         mean_photon_num: float = 0.5,
         encoding_type: dict = None,
         phase_error: float = 0,
+        extinction_ratio: float = 0,
     ) -> None:
         """Construct a COWLightSource.
 
@@ -89,6 +88,8 @@ class COWLightSource(LightSource):
                 ``time_bin_cow``.
             phase_error (float): probability of a π phase flip per pulse
                 (default 0).
+            extinction_ratio (float): IM extinction ratio (linear).
+                0 = perfect extinction.  100 = 20 dB.  1000 = 30 dB.
         """
         if encoding_type is None:
             encoding_type = time_bin_cow
@@ -102,6 +103,8 @@ class COWLightSource(LightSource):
             encoding_type=encoding_type,
             phase_error=phase_error,
         )
+        self.extinction_ratio = extinction_ratio
+
 
     def emit(self, state_list: list) -> None:
         """Emit photons for each state in *state_list*.
@@ -120,50 +123,85 @@ class COWLightSource(LightSource):
         time = self.timeline.now()
         period = int(round(1e12 / self.frequency))   # slot period in ps
         rng    = self.get_generator()
+        
+        # Compute leakage mean photon number
+        mu_leak = 0.0
+        if self.extinction_ratio > 0:
+            mu_leak = self.mean_photon_num / self.extinction_ratio
 
-        # ── Passo 1: separar slots não-vacuum ─────────────────────────────
-        # Percorremos state_list uma vez para coletar (índice_slot, estado).
-        # Esta lista tem comprimento ≈ N_símbolos (metade de len(state_list))
-        # porque metade dos slots são vacuum em média.
-        non_vacuum: list[tuple[int, object]] = [
-            (i, s) for i, s in enumerate(state_list) if s is not VACUUM_STATE
-        ]
+        # Separate vacuum and non-vacuum slots
+        # For vacuum slots with leakage, we still need to emit (weak) photons
+        vacuum_with_leak: list[tuple[int, object]] = []
+        non_vacuum: list[tuple[int, object]] = []
 
-        if not non_vacuum:
-            return   # burst inteiramente vacuum — nada a emitir
+        for i, s in enumerate(state_list):
+            if s is VACUUM_STATE:
+                if mu_leak > 0:
+                    # Use EARLY_STATE as the leakage state (arbitrary —
+                    # leakage has random phase in practice, but for the
+                    # time-of-arrival measurement it just creates a click
+                    # in the wrong bin)
+                    vacuum_with_leak.append((i, time_bin_cow["early"]))
+            else:
+                non_vacuum.append((i, s))
 
-        n_nv = len(non_vacuum)
+        # ── Non-vacuum slots: normal Poisson emission ──
+        if non_vacuum:
+            n_nv = len(non_vacuum)
+            counts = rng.poisson(self.mean_photon_num, size=n_nv)
 
-        # ── Passo 2: draw Poisson vetorizado ──────────────────────────────
-        # Uma única chamada C gera todas as contagens.
-        # dtype int garante que a comparação counts[k] == 0 seja O(1).
-        counts: np.ndarray = rng.poisson(self.mean_photon_num, size=n_nv)
+            for k in np.nonzero(counts)[0]:
+                i, state = non_vacuum[k]
+                slot_time = time + i * period
+                n_photons = int(counts[k])
 
-        # ── Passo 3: iterar apenas sobre slots com fótons (≈10% do total) ─
-        for k in np.nonzero(counts)[0]:
-            i, state = non_vacuum[k]
-            slot_time = time + i * period
-            n_photons = int(counts[k])
+                if self.phase_error > 0 and rng.random() < self.phase_error:
+                    state = tuple(np.multiply([1, -1], state))
 
-            # Correção de fase opcional (aplicada por slot, não por fóton)
-            if self.phase_error > 0 and rng.random() < self.phase_error:
-                state = tuple(np.multiply([1, -1], state))
+                for _ in range(n_photons):
+                    wl = (
+                        self.linewidth * rng.standard_normal() + self.wavelength
+                        if self.linewidth > 0
+                        else self.wavelength
+                    )
+                    photon = Photon(
+                        str(i),
+                        self.timeline,
+                        wavelength=wl,
+                        location=self.owner,
+                        encoding_type=self.encoding_type,
+                        quantum_state=tuple(state),
+                    )
+                    process = Process(self._receivers[0], "get", [photon])
+                    event = Event(slot_time, process)
+                    self.timeline.schedule(event)
+                    self.photon_counter += 1
 
-            for _ in range(n_photons):
-                wl = (
-                    self.linewidth * rng.standard_normal() + self.wavelength
-                    if self.linewidth > 0
-                    else self.wavelength
-                )
-                photon = Photon(
-                    str(i),
-                    self.timeline,
-                    wavelength=wl,
-                    location=self.owner,
-                    encoding_type=self.encoding_type,
-                    quantum_state=tuple(state),
-                )
-                process = Process(self._receivers[0], "get", [photon])
-                event   = Event(slot_time, process)
-                self.timeline.schedule(event)
-                self.photon_counter += 1
+        # ── Vacuum slots with leakage: weak Poisson emission ──
+        if vacuum_with_leak:
+            n_vl = len(vacuum_with_leak)
+            leak_counts = rng.poisson(mu_leak, size=n_vl)
+
+            for k in np.nonzero(leak_counts)[0]:
+                i, state = vacuum_with_leak[k]
+                slot_time = time + i * period
+                n_photons = int(leak_counts[k])
+
+                for _ in range(n_photons):
+                    wl = (
+                        self.linewidth * rng.standard_normal() + self.wavelength
+                        if self.linewidth > 0
+                        else self.wavelength
+                    )
+                    photon = Photon(
+                        str(i),
+                        self.timeline,
+                        wavelength=wl,
+                        location=self.owner,
+                        encoding_type=self.encoding_type,
+                        quantum_state=tuple(state),
+                    )
+                    process = Process(self._receivers[0], "get", [photon])
+                    event = Event(slot_time, process)
+                    self.timeline.schedule(event)
+                    self.photon_counter += 1

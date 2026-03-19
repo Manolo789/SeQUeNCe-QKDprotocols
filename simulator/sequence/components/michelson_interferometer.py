@@ -45,6 +45,18 @@ Implementation notes
   this is implicit here (no polarisation mode tracked).
 * ``phase_error`` is a per-event additive Gaussian noise on the phase
   (standard deviation, radians).
+  
+NOISE FIX: _interfere() now computes the total phase as:
+    φ_total = φ_interferometer + φ_noise + (photon.channel_phase − stored.channel_phase)
+
+where φ_interferometer is the static setting, φ_noise is the per-event
+Gaussian noise from the interferometer's thermal instability, and the
+last term is the differential channel phase accumulated by the two
+photons during propagation.
+
+This separates the two physical sources of phase error:
+  1. Channel decoherence (fiber length, dispersion) → photon.channel_phase
+  2. Interferometer thermal drift → self.phase_error
 
 Receiver convention
 ~~~~~~~~~~~~~~~~~~~
@@ -74,7 +86,8 @@ class MichelsonInterferometer(Entity):
             clock period (τ = 1e12 / f_clock).
         phase (float): interferometer phase in radians.  0 → constructive
             interference at DM1 (the desired operating point).
-        phase_error (float): standard deviation (rad) of per-shot phase noise.
+        phase_error (float): per-event phase noise from
+            interferometer thermal instability.
         _photon_buffer (Optional[Photon]): photon currently delayed in the
             long arm.
         _buffer_time (int): timeline time (ps) when the buffered photon
@@ -256,9 +269,13 @@ class MichelsonInterferometer(Entity):
         phi = self.phase
         if self.phase_error > 0.0:
             phi += float(self.get_generator().normal(0.0, self.phase_error))
-        prob_dm1 = cos(phi / 2.0) ** 2   # = (1 + cos φ) / 2
-        
-        # prob_dm2 = 1 - prob_dm1          # = (1 − cos φ) / 2
+
+        phi_ch_new = getattr(photon, "channel_phase", 0.0)
+        phi_ch_old = getattr(stored, "channel_phase", 0.0)
+        phi += (phi_ch_new - phi_ch_old)
+
+        prob_dm1 = cos(phi / 2.0) ** 2
+
 
         if self.get_generator().random() < prob_dm1:
             if hasattr(self.owner, "record_interference"):
