@@ -437,7 +437,6 @@ class COW(StackProtocol):
             qsd = self.owner.components[self.qsd_name]
             if hasattr(qsd, "get_monitoring_visibility"):
                 v_burst = qsd.get_monitoring_visibility()
-                print(f"v_burst: {v_burst}")
                 log.logger.debug(
                     self.name + f" [COW] burst visibility = {v_burst:.4f}"
                 )
@@ -583,24 +582,6 @@ class COW(StackProtocol):
 
                         self.visibility.append(v_session)
                         self.another.visibility.append(v_session)
-
-                        dm1, dm2 = (0, 0)
-                        if bob_qsd is not None and hasattr(bob_qsd, "get_session_counts"):
-                            dm1, dm2 = bob_qsd.get_session_counts()
-                        print(f"Session V = {v_session:.4f}  "
-                              f"(DM1={dm1}, DM2={dm2})")
-                        log.logger.info(
-                            self.name +
-                            f" [COW] session visibility = {v_session:.4f}"
-                            f" (DM1={dm1}, DM2={dm2})"
-                        )
-                        if v_session < self.VISIBILITY_THRESHOLD:
-                            log.logger.warning(
-                                self.name + " [COW] session visibility "
-                                "below threshold — possible eavesdropping!"
-                            )
-
-
 
                         self.keys_left_list[0] -= 1
 

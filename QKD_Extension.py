@@ -22,6 +22,7 @@ def safe_log10(lst: list) -> np.ndarray:
 
 
 def binary_entropy(Q):
+    q = max(0.0, min(1.0, Q))
     if Q == 0 or Q == 1:
         return 0
     return -Q * math.log2(Q) - (1 - Q) * math.log2(1 - Q)
@@ -33,14 +34,19 @@ def _collect_metrics(protocol, distance: float, attenuation: float):
     QBER = protocol.error_rates
     THROUGHPUTS = np.mean(protocol.throughputs)
     LATENCY = protocol.latency
+    LOSS = 1-10**((distance*attenuation)/(-10))
     R_s_list = []
+    
+    if not QBER:
+        return QBER, THROUGHPUTS, LATENCY, 0.0, LOSS, 0.0
+    
     for i, e in enumerate(QBER):
         R_s = protocol.sifted_bits_length[i] / protocol.send_bits_length
         secret_key_rate_mean += R_s * (1 - binary_entropy(e))
         R_s_list.append(R_s)
     SECRET_KEY_RATE = secret_key_rate_mean/len(QBER)
     mean_R_s = np.mean(np.array(R_s_list, dtype=float))
-    LOSS = 1-10**((distance*attenuation)/(-10))
+    
     return QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS, mean_R_s
     
 def _collect_cow_metrics(protocol, visibility, ls_params, distance: float, attenuation: float):
@@ -50,6 +56,9 @@ def _collect_cow_metrics(protocol, visibility, ls_params, distance: float, atten
     qber_list = protocol.error_rates
     throughputs = np.mean(protocol.throughputs)
     latency = protocol.latency
+    
+    if not qber_list:
+        return qber_list, throughput, latency, 0.0, loss, 0.0
     
     # R_sk calculated based on https://doi.org/10.1063/1.2126792
     t = 10 ** ((distance * attenuation) / (-10))
@@ -367,7 +376,7 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s, VISIBILITY
     
     
-def sim_variable_distance(d_step, d_lim, channel_parameters, ls_params, detector_params, detector_params_cow, keysize):
+def sim_variable_distance(runtime, d_step, d_lim, channel_parameters, ls_params, detector_params, detector_params_cow, keysize):
     skr_bb84, qber_bb84, throughputs_bb84, latency_bb84, loss_bb84, rs_bb84 = [], [], [], [], [], []
     skr_b92, qber_b92, throughputs_b92, latency_b92, loss_b92, rs_b92 = [], [], [], [], [], []
     skr_cow, qber_cow, throughputs_cow, latency_cow, loss_cow, rs_cow, visibility_cow = [], [], [], [], [], [], []
@@ -376,17 +385,17 @@ def sim_variable_distance(d_step, d_lim, channel_parameters, ls_params, detector
     skr_b92e, qber_b92e, throughputs_b92e, latency_b92e, loss_b92e, rs_b92e = [], [], [], [], [], []
     skr_cowe, qber_cowe, throughputs_cowe, latency_cowe, loss_cowe, rs_cowe, visibility_cowe = [], [], [], [], [], [], []
     d_list = []
-    d = 0
+    d = d_step
     while d <= d_lim:
         # Sem Eve (Cenário Ideal)
-        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
-        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
-        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize)
+        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, runtime=runtime, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, runtime=runtime, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, runtime=runtime, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize)
 
         # Com Eve
-        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
-        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
-        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize)
+        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, runtime=runtime, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, runtime=runtime, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize, source_type="sps")
+        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, runtime=runtime, distance=d, polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=keysize)
         
         d_list.append(d)
         
@@ -445,7 +454,7 @@ def sim_variable_distance(d_step, d_lim, channel_parameters, ls_params, detector
     }
     pd.DataFrame(metrics).to_csv('metrics_variable-distance.csv', index=False)
 
-def sim_variable_keysize(keysize_list, channel_parameters, ls_params, detector_params, detector_params_cow):
+def sim_variable_keysize(runtime, keysize_list, channel_parameters, ls_params, detector_params, detector_params_cow):
     skr_bb84, qber_bb84, throughputs_bb84, latency_bb84, loss_bb84, rs_bb84 = [], [], [], [], [], []
     skr_b92, qber_b92, throughputs_b92, latency_b92, loss_b92, rs_b92 = [], [], [], [], [], []
     skr_cow, qber_cow, throughputs_cow, latency_cow, loss_cow, rs_cow, visibility_cow = [], [], [], [], [], [], []
@@ -456,16 +465,14 @@ def sim_variable_keysize(keysize_list, channel_parameters, ls_params, detector_p
 
     for k in keysize_list:
         # Sem Eve (Cenário Ideal)
-        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
-        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
-        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k)
+        QBER_BB84, THROUGHPUTS_BB84, LATENCY_BB84, SECRET_KEY_RATE_BB84, LOSS_BB84, RS_BB84 = simulation_BB84(ls_params, detector_params, runtime=runtime, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_B92, THROUGHPUTS_B92, LATENCY_B92, SECRET_KEY_RATE_B92, LOSS_B92, RS_B92 = simulation_B92(ls_params, detector_params, runtime=runtime, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_COW, THROUGHPUTS_COW, LATENCY_COW, SECRET_KEY_RATE_COW, LOSS_COW, RS_COW, VISIBILITY_COW = simulation_COW(ls_params, detector_params_cow, runtime=runtime, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k)
 
         # Com Eve
-        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
-        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
-        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k)
-        
-        d_list.append(d)
+        QBER_BB84e, THROUGHPUTS_BB84e, LATENCY_BB84e, SECRET_KEY_RATE_BB84e, LOSS_BB84e, RS_BB84e = simulation_BB84_Eve(ls_params, detector_params, runtime=runtime, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_B92e, THROUGHPUTS_B92e, LATENCY_B92e, SECRET_KEY_RATE_B92e, LOSS_B92e, RS_B92e = simulation_B92_Eve(ls_params, detector_params, runtime=runtime, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k, source_type="sps")
+        QBER_COWe, THROUGHPUTS_COWe, LATENCY_COWe, SECRET_KEY_RATE_COWe, LOSS_COWe, RS_COWe, VISIBILITY_COWe = simulation_COW_Eve(ls_params, detector_params_cow, runtime=runtime, distance=channel_parameters[0], polarization_fidelity=channel_parameters[2], attenuation=channel_parameters[1], keysize=k)
         
         skr_bb84.append(SECRET_KEY_RATE_BB84); qber_bb84.append(np.mean(QBER_BB84)); throughputs_bb84.append(THROUGHPUTS_BB84); latency_bb84.append(LATENCY_BB84); loss_bb84.append(LOSS_BB84); rs_bb84.append(RS_BB84)
         skr_b92.append(SECRET_KEY_RATE_B92); qber_b92.append(np.mean(QBER_B92)); throughputs_b92.append(THROUGHPUTS_B92); latency_b92.append(LATENCY_B92); loss_b92.append(LOSS_B92); rs_b92.append(RS_B92)
@@ -625,8 +632,8 @@ def run_simulation():
     keysize = 10000
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
-    sim_variable_distance(d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize)
-    sim_variable_keysize(keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000], channel_parameters, ls_params, detector_params, detector_params_cow):
+    sim_variable_distance(runtime=200, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize)
+    sim_variable_keysize(runtime=200, keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000], channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow)
     
     
     df_d = pd.read_csv('metrics_variable-distance.csv')
