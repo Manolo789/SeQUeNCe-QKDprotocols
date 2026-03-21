@@ -204,6 +204,9 @@ class BB84(StackProtocol):
             self.another.key_bits = []
             self.latency = 0
             self.another.latency = 0
+            
+            self.send_bits_length = 0
+            self.another.send_bits_length = 0
 
             self.working = True
             self.another.working = True
@@ -262,7 +265,7 @@ class BB84(StackProtocol):
 
             self.basis_lists.append(basis_list)
             self.bit_lists.append(bit_list)
-            self.send_bits_length = num_pulses
+            self.send_bits_length += num_pulses
 
             # schedule another
             self.start_time = self.owner.timeline.now()

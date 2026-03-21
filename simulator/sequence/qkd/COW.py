@@ -282,6 +282,9 @@ class COW(StackProtocol):
             self.another.latency = 0
             self.working = True
             self.another.working = True
+            
+            self.send_bits_length = 0
+            self.another.send_bits_length = 0
 
             ls = self.owner.components[self.ls_name]
             self.ls_freq = ls.frequency
@@ -350,7 +353,7 @@ class COW(StackProtocol):
             decoy_pos = [int(i) for i, d in enumerate(is_decoy) if d]
             self.bit_lists.append(bit_list.tolist())
             self.decoy_positions.append(decoy_pos)
-            self.send_bits_length = num_symbols
+            self.send_bits_length += num_symbols
             
             state_list = build_cow_state_list(bit_list.tolist(), is_decoy.tolist())
             lightsource.emit(state_list)
