@@ -81,13 +81,41 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title,
     ax3.grid(True)
     plt.savefig(f"{filename}_graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
+    
+def plot_v(visibility, visibility_Eve, x_list, x_label, title, filename):
+    """ Function that generates the graphs.
 
+    Attributes:
+        visibility = visibility_list_cow
+        visibility_Eve = visibility_list_cow_Eve
+        x_list: List of values ​​for the X-axis. In this simulation, it could be the distance or the key size.
+        x_label: X-axis label ("Distance (d) [m]")
+        title: f"Aten.={att_lim} dB/m, Keysize={keysize} bits" | f"Aten.={att_lim} dB/m, Distance={distance} meters"
+    """
+    # display our collected metrics
+    # Ideal scenario
+    # R_sk(x)
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    fig.suptitle(title)
+    linha_y1, = ax1.plot(np.array(x_list), visibility, linestyle=(0, (1, 1)), color='blue', label="V of the COW")
+    linha_y2, = ax1.plot(np.array(x_list), visibility_Eve, linestyle=(0, (3, 1, 1, 1, 1, 1)), color='green', label="V of the COW+Eve")
+    ax1.set_xlabel(x_label)
+    ax1.set_ylabel("V - Visibility [%]")
+
+    linhas = [linha_y1, linha_y2]
+    labels = [l.get_label() for l in linhas]
+    ax1.legend(linhas, labels, loc='upper center', bbox_to_anchor=(0.5, -0.2),
+          fancybox=True, shadow=True, ncol=5)
+    ax1.grid(True)
+    plt.savefig(f"{filename}_graph-visibility.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
 def main():
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
     keysize = 10000
-    df_d = pd.read_csv('metrics_variable-distance.csv')
-    df_k = pd.read_csv('metrics_variable-keysize.csv')
+    df_d = pd.read_csv('data/metrics_variable-distance.csv')
+    df_k = pd.read_csv('data/metrics_variable-keysize.csv')
 
     plot_graph(skr=[df_d["R_sk-BB84"], df_d["R_sk-B92"], df_d["R_sk-COW"]], 
            skr_Eve=[df_d["R_sk-BB84+Eve"], df_d["R_sk-B92+Eve"], df_d["R_sk-COW+Eve"]], 
@@ -104,6 +132,16 @@ def main():
            qber_Eve=[df_k["QBER-BB84+Eve"], df_k["QBER-B92+Eve"], df_k["QBER-COW+Eve"]], 
            rs=[df_k["R_s-BB84"], df_k["R_s-B92"], df_k["R_s-COW"]], 
            rs_Eve=[df_k["R_s-BB84+Eve"], df_k["R_s-B92+Eve"], df_k["R_s-COW+Eve"]], 
+           x_list=df_k["keysize"], 
+           x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters", filename="keysize")
+           
+    plot_v(visibility=df_d["Visibility-COW"], 
+           visibility_Eve=df_d["Visibility-COW+Eve"],
+           x_list=df_d["distance"], 
+           x_label="Distance (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Keysize={keysize} bits", filename="distance")
+    
+    plot_v(visibility=df_k["Visibility-COW"], 
+           visibility_Eve=df_k["Visibility-COW+Eve"],
            x_list=df_k["keysize"], 
            x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters", filename="keysize")
 
