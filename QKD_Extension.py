@@ -521,7 +521,7 @@ def _worker_keysize(task: dict):
 #  Parallel sweep functions
 # ═══════════════════════════════════════════════════════════════════════
 
-def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params,
+def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params_cow, ls_params,
                           detector_params, detector_params_cow, keysize, key_num):
     """Build a flat list of task dicts for every (protocol × distance) pair."""
     att  = channel_parameters[1]
@@ -543,7 +543,7 @@ def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params,
                                  "source_type": "sps"}})
 
         tasks.append({"protocol": "COW", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params,
+                      "kwargs": {**common, "ls_params": ls_params_cow,
                                  "detector_params": detector_params_cow}})
 
         tasks.append({"protocol": "BB84+Eve", "distance": d,
@@ -557,12 +557,12 @@ def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params,
                                  "source_type": "sps"}})
 
         tasks.append({"protocol": "COW+Eve", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params,
+                      "kwargs": {**common, "ls_params": ls_params_cow,
                                  "detector_params": detector_params_cow}})
     return tasks
 
 
-def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params,
+def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params_cow, ls_params,
                          detector_params, detector_params_cow, key_num):
     """Build a flat list of task dicts for every (protocol × keysize) pair."""
     dist = channel_parameters[0]
@@ -585,7 +585,7 @@ def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params,
                                  "source_type": "sps"}})
 
         tasks.append({"protocol": "COW", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params,
+                      "kwargs": {**common, "ls_params": ls_params_cow,
                                  "detector_params": detector_params_cow}})
 
         tasks.append({"protocol": "BB84+Eve", "keysize": k,
@@ -599,7 +599,7 @@ def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params,
                                  "source_type": "sps"}})
 
         tasks.append({"protocol": "COW+Eve", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params,
+                      "kwargs": {**common, "ls_params": ls_params_cow,
                                  "detector_params": detector_params_cow}})
     return tasks
 
@@ -685,7 +685,7 @@ def _collect_keysize_results(keysize_list, results_list):
 # ═══════════════════════════════════════════════════════════════════════
 
 def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
-                          ls_params, detector_params, detector_params_cow,
+                          ls_params_cow, ls_params, detector_params, detector_params_cow,
                           keysize, key_num, max_workers=None):
     """Parallel version of the original sim_variable_distance.
 
@@ -700,7 +700,7 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
         
     tasks = _build_distance_tasks(
         runtime, d_list, channel_parameters,
-        ls_params, detector_params, detector_params_cow, keysize, key_num)
+        ls_params_cow, ls_params, detector_params, detector_params_cow, keysize, key_num)
 
     total = len(tasks)
     results_list = []
@@ -737,7 +737,7 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
     print("[parallel] Saved metrics_variable-distance.csv")
 
 def sim_variable_keysize(runtime, keysize_list, channel_parameters,
-                         ls_params, detector_params, detector_params_cow, key_num,
+                         ls_params_cow, ls_params, detector_params, detector_params_cow, key_num,
                          max_workers=None):
     """Parallel version of the original sim_variable_keysize."""
     if max_workers is None:
@@ -745,7 +745,7 @@ def sim_variable_keysize(runtime, keysize_list, channel_parameters,
 
     tasks = _build_keysize_tasks(
         runtime, keysize_list, channel_parameters,
-        ls_params, detector_params, detector_params_cow, key_num)
+        ls_params_cow, ls_params, detector_params, detector_params_cow, key_num)
 
     total = len(tasks)
     results_list = []
@@ -784,18 +784,19 @@ def sim_variable_keysize(runtime, keysize_list, channel_parameters,
 def run_simulation():
     start = time.time()
 
-    ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
+    ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 1}
+    ls_params_cow = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
     detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
     detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": 20e6}]
     keysize = 10000
-    key_num = 10
+    key_num = 1
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
-    sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num)
-    sim_variable_keysize(runtime=1000, keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num)
+    sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num)
+    sim_variable_keysize(runtime=1000, keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num)
 
     end = time.time()
     
