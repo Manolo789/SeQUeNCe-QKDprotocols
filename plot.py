@@ -49,7 +49,7 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title,
           fancybox=True, shadow=True, ncol=5)
     ax1.grid(True)
     ax3.grid(True)
-    plt.savefig(f"{filename}_graph-ideal_scenario.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"data/{filename}_graph-ideal_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Scenario with Eve
@@ -79,7 +79,7 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title,
           fancybox=True, shadow=True, ncol=5)
     ax1.grid(True)
     ax3.grid(True)
-    plt.savefig(f"{filename}_graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"data/{filename}_graph-Eve_scenario.png", dpi=300, bbox_inches='tight')
     plt.close()
     
 def plot_v(visibility, visibility_Eve, x_list, x_label, title, filename):
@@ -89,8 +89,6 @@ def plot_v(visibility, visibility_Eve, x_list, x_label, title, filename):
         visibility = visibility_list_cow
         visibility_Eve = visibility_list_cow_Eve
         x_list: List of values ​​for the X-axis. In this simulation, it could be the distance or the key size.
-        x_label: X-axis label ("Distance (d) [m]")
-        title: f"Aten.={att_lim} dB/m, Keysize={keysize} bits" | f"Aten.={att_lim} dB/m, Distance={distance} meters"
     """
     # display our collected metrics
     # Ideal scenario
@@ -107,7 +105,7 @@ def plot_v(visibility, visibility_Eve, x_list, x_label, title, filename):
     ax1.legend(linhas, labels, loc='upper center', bbox_to_anchor=(0.5, -0.2),
           fancybox=True, shadow=True, ncol=5)
     ax1.grid(True)
-    plt.savefig(f"{filename}_graph-visibility.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"data/{filename}_graph-visibility.png", dpi=300, bbox_inches='tight')
     plt.close()
     
 def main():

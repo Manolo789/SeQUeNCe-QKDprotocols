@@ -733,7 +733,7 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
 
     metrics = _collect_distance_results(d_list, results_list)
         
-    pd.DataFrame(metrics).to_csv('metrics_variable-distance.csv', index=False)
+    pd.DataFrame(metrics).to_csv('data/metrics_variable-distance.csv', index=False)
     print("[parallel] Saved metrics_variable-distance.csv")
 
 def sim_variable_keysize(runtime, keysize_list, channel_parameters,
@@ -778,7 +778,7 @@ def sim_variable_keysize(runtime, keysize_list, channel_parameters,
 
     metrics = _collect_keysize_results(keysize_list, results_list)
 
-    pd.DataFrame(metrics).to_csv('metrics_variable-keysize.csv', index=False)
+    pd.DataFrame(metrics).to_csv('data/metrics_variable-keysize.csv', index=False)
     print("[parallel] Saved metrics_variable-keysize.csv")
 
 def run_simulation():
@@ -796,12 +796,12 @@ def run_simulation():
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
     sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num)
-    sim_variable_keysize(runtime=1000, keysize_list=[20, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num)
+    sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num)
 
     end = time.time()
     
     simulator_metrics = {"Total_execution_time_(seconds)": [end-start]}
-    pd.DataFrame(simulator_metrics).to_csv('simulator_metrics.csv', index=False)
+    pd.DataFrame(simulator_metrics).to_csv('data/simulator_metrics.csv', index=False)
 
 if __name__ == "__main__":
     run_simulation()
