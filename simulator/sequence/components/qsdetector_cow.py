@@ -1,35 +1,39 @@
-"""QSDetector for the COW QKD protocol.
+"""
+========================================================================
+Detector model for the COW protocol in the SeQUeNCe simulator -- License
+========================================================================
 
-Bob's detector assembly in the COW protocol (Stucki et al., 2005) consists
-of two optical paths fed by a **non-equilibrated beamsplitter** with
-transmission coefficient t_B ≈ 1:
+Copyright © 2026 Manolo789 -- https://github.com/Manolo789/SeQUeNCe-QKDprotocols
 
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│   incoming       ┌─────────┐  t_B   ─── DB (dataline)       │
-│   photon  ──────►│   BS    │                                │
-│                  │ (t_B,   │  1-t_B ─── Michelson ─► DM1    │
-│                  │ 1-t_B)  │             interferometer     │
-│                  └─────────┘          └─────────────► DM2   │
-└─────────────────────────────────────────────────────────────┘
+All rights reserved.
 
-* **Dataline** (DB, ``detectors[0]``): receives transmitted photons with
-  probability t_B; used to establish the raw key by arrival-time measurement.
-* **Monitoring line**: receives reflected photons with probability 1 − t_B;
-  fed into the :class:`~sequence.components.michelson_interferometer.MichelsonInterferometer`
-  whose two output detectors are DM1 (``detectors[1]``) and DM2
-  (``detectors[2]``).
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
 
-Visibility measurement
-----------------------
-After each key-generation session the protocol calls
-:meth:`get_session_visibility` which returns the fringe visibility
-estimated from the DM1 and DM2 detection counts accumulated **since the
-last session reset** — matching the definition in Eq. (3) of Stucki et al.
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
 
-The dataline detection times are retrieved via the standard
-:meth:`get_photon_times` interface (index 0 → DB only), maintaining
-compatibility with :meth:`QKDNode.get_bits`.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+
+    * Neither the name SeQUeNCe-QKDprotocols nor the names of any SeQUeNCe-QKDprotocols contributors
+      may be used to endorse or promote products derived from this software
+      without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY MANOLO789 AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL MANOLO789 BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+========================================================================
+
 """
 
 from typing import TYPE_CHECKING, Any

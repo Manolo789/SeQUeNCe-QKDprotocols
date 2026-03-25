@@ -1,39 +1,39 @@
-"""COW-aware light source.
+"""
+============================================================================
+Light source model for the COW protocol in the SeQUeNCe simulator -- License
+============================================================================
 
-This module provides :class:`COWLightSource`, a thin subclass of
-:class:`~sequence.components.light_source.LightSource` that is able to emit
-the *vacuum state* explicitly.
+Copyright © 2026 Manolo789 -- https://github.com/Manolo789/SeQUeNCe-QKDprotocols
 
-In the standard ``LightSource.emit`` every entry in the state list triggers
-a Poisson draw of ``mean_photon_num`` photons.  For the COW protocol the
-vacuum slots in a bit-encoded symbol must produce **zero photons with
-certainty** (not merely with high probability), because:
+All rights reserved.
 
-* Bit 0  = |μ⟩|0⟩  (pulse then vacuum — second slot is deterministically empty)
-* Bit 1  = |0⟩|μ⟩  (vacuum then pulse — first slot is deterministically empty)
-* Decoy  = |μ⟩|μ⟩  (both slots carry a weak coherent pulse)
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
 
-``COWLightSource`` recognises the sentinel ``VACUUM_STATE = None`` exported
-from :mod:`sequence.utils.encoding_cow` and skips photon emission for those
-slots while still advancing the simulation clock by one slot period.
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
 
-Usage
------
-Replace ``LightSource`` with ``COWLightSource`` when building a
-:class:`~sequence.topology.node.QKDNode` for the COW protocol::
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
 
-    from sequence.components.cow_light_source import COWLightSource
-    from sequence.utils.encoding_cow import time_bin_cow
+    * Neither the name SeQUeNCe-QKDprotocols nor the names of any SeQUeNCe-QKDprotocols contributors
+      may be used to endorse or promote products derived from this software
+      without specific prior written permission.
 
-    ls = COWLightSource("alice.ls", timeline,
-                        encoding_type=time_bin_cow,
-                        frequency=434e6,
-                        mean_photon_num=0.5)
-    alice.add_component(ls)
-    ls.add_receiver(alice)          # forward photons to node → qchannel
+THIS SOFTWARE IS PROVIDED BY MANOLO789 AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL MANOLO789 BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-The :meth:`emit` method accepts the flat state list produced by
-:func:`~sequence.utils.encoding_cow.build_cow_state_list`.
+============================================================================
+
 """
 
 from typing import TYPE_CHECKING
