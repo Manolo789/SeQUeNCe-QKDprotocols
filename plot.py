@@ -107,13 +107,113 @@ def plot_v(visibility, visibility_Eve, x_list, x_label, title, filename):
     ax1.grid(True)
     plt.savefig(f"data/{filename}_graph-visibility.png", dpi=300, bbox_inches='tight')
     plt.close()
-    
+
+def plot_dual_graph(
+    skr_left, qber_left, rs_left, x_list_left, x_label_left, subtitle_left,
+    skr_right, qber_right, rs_right, x_list_right, x_label_right, subtitle_right,
+    title, filename
+):
+    """
+    Parameters
+    ----------
+    skr_left / skr_right : list of 3 array-like
+        [BB84, B92, COW] secret-key-rate series.
+    qber_left / qber_right : list of 3 array-like
+        [BB84, B92, COW] QBER series.
+    rs_left / rs_right : list of 3 array-like
+        [BB84, B92, COW] useful-bit-rate series.
+    x_list_left / x_list_right : array-like
+        X-axis values for each column.
+    x_label_left / x_label_right : str
+        X-axis labels.
+    subtitle_left / subtitle_right : str
+        Subtitle displayed above each column of subplots.
+    title : str
+        Super-title for the whole figure.
+    filename : str
+        Output file saved as  data/{filename}_graph-dual.png
+    """
+ 
+    fig, axes = plt.subplots(2, 2, figsize=(18, 10))
+    fig.suptitle(title, fontsize=14)
+ 
+    # ---- helper to draw one column ----
+    def _draw_column(ax_top, ax_bot, skr, qber, rs, x_list, x_label, subtitle):
+        x = np.array(x_list)
+ 
+        # — Subtitle for this column —
+        ax_top.set_title(subtitle, fontsize=12)
+ 
+        # — Top subplot: R_sk (left axis) + QBER (right axis) —
+        ax_top.plot(x, safe_log10(skr[0]), linestyle=(0, (1, 1)),
+                    color='blue',  label="R_sk of the BB84")
+        ax_top.plot(x, safe_log10(skr[1]), linestyle=(0, (1, 5)),
+                    color='green', label="R_sk of the B92")
+        ax_top.plot(x, safe_log10(skr[2]), linestyle=(0, (1, 10)),
+                    color='red',   label="R_sk of the COW")
+        ax_top.set_ylabel("log₁₀ Secret Key Rate (R_sk)\n[bits per sent qubit]")
+        ax_top.grid(True)
+ 
+        ax_qber = ax_top.twinx()
+        ax_qber.plot(x, np.array(qber[0]) * 100, linestyle=(0, (5, 1)),
+                     color='orange', label="QBER of the BB84")
+        ax_qber.plot(x, np.array(qber[1]) * 100, linestyle=(0, (5, 5)),
+                     color='maroon', label="QBER of the B92")
+        ax_qber.plot(x, np.array(qber[2]) * 100, linestyle=(0, (5, 10)),
+                     color='black',  label="QBER of the COW")
+        ax_qber.set_ylabel("QBER [%]")
+ 
+        # — Bottom subplot: R_s —
+        l1, = ax_bot.plot(x, np.array(rs[0]) * 100, linestyle="solid",
+                          color='grey',   label="BB84")
+        l2, = ax_bot.plot(x, np.array(rs[1]) * 100,
+                          linestyle=(0, (3, 1, 1, 1)),
+                          color='cyan',   label="B92")
+        l3, = ax_bot.plot(x, np.array(rs[2]) * 100,
+                          linestyle=(0, (3, 1, 1, 1, 1, 1)),
+                          color='violet', label="COW")
+        ax_bot.set_xlabel(x_label)
+        ax_bot.set_ylabel("R_s - Useful bit rate [%]")
+        ax_bot.grid(True)
+ 
+        # Collect all line handles for the shared legend
+        lines_top  = ax_top.get_lines() + ax_qber.get_lines()
+        lines_bot  = [l1, l2, l3]
+        return lines_top + lines_bot
+ 
+    # ---- left column (e.g. distance) ----
+    lines_left = _draw_column(
+        axes[0, 0], axes[1, 0],
+        skr_left, qber_left, rs_left,
+        x_list_left, x_label_left, subtitle_left,
+    )
+ 
+    # ---- right column (e.g. key size) ----
+    lines_right = _draw_column(
+        axes[0, 1], axes[1, 1],
+        skr_right, qber_right, rs_right,
+        x_list_right, x_label_right, subtitle_right,
+    )
+ 
+    # ---- single shared legend at the bottom ----
+    labels = [l.get_label() for l in lines_left]
+    fig.legend(lines_left, labels,
+               loc='lower center',
+               bbox_to_anchor=(0.5, -0.02),
+               fancybox=True, shadow=True, ncol=5)
+ 
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    plt.savefig(f"data/{filename}_graph-dual.png",
+                dpi=300, bbox_inches='tight')
+    plt.close() 
+
 def main():
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
     keysize = 10000
     df_d = pd.read_csv('data/metrics_variable-distance.csv')
     df_k = pd.read_csv('data/metrics_variable-keysize.csv')
+
 
     plot_graph(skr=[df_d["R_sk-BB84"], df_d["R_sk-B92"], df_d["R_sk-COW"]], 
            skr_Eve=[df_d["R_sk-BB84+Eve"], df_d["R_sk-B92+Eve"], df_d["R_sk-COW+Eve"]], 
@@ -142,6 +242,34 @@ def main():
            visibility_Eve=df_k["Visibility-COW+Eve"],
            x_list=df_k["keysize"], 
            x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters", filename="keysize")
+
+    plot_dual_graph(
+    skr_left=[df_d["R_sk-BB84"], df_d["R_sk-B92"], df_d["R_sk-COW"]],   
+    qber_left=[df_d["QBER-BB84"], df_d["QBER-B92"], df_d["QBER-COW"]],   
+    rs_left=[df_d["R_s-BB84"], df_d["R_s-B92"], df_d["R_s-COW"]],   
+    x_list_left=df_d["distance"],   x_label_left="Distance (d) [m]",   subtitle_left=f"Distance variation - Keysize={keysize} bits",
+
+    skr_right=[df_k["R_sk-BB84"], df_k["R_sk-B92"], df_k["R_sk-COW"]],  
+    qber_right=[df_k["QBER-BB84"], df_k["QBER-B92"], df_k["QBER-COW"]],  
+    rs_right=[df_k["R_s-BB84"], df_k["R_s-B92"], df_k["R_s-COW"]],  
+    x_list_right=df_k["keysize"],   x_label_right="Key Size (k) [bit width]",  subtitle_right=f"Key size variation - Distance={channel_parameters[0]} meters",
+    title=f"Aten.={channel_parameters[1]} dB/m",
+    filename="ideal_scenario"
+    )
+    
+    plot_dual_graph(
+    skr_left=[df_d["R_sk-BB84+Eve"], df_d["R_sk-B92+Eve"], df_d["R_sk-COW+Eve"]],   
+    qber_left=[df_d["QBER-BB84+Eve"], df_d["QBER-B92+Eve"], df_d["QBER-COW+Eve"]],   
+    rs_left=[df_d["R_s-BB84+Eve"], df_d["R_s-B92+Eve"], df_d["R_s-COW+Eve"]],   
+    x_list_left=df_d["distance"],   x_label_left="Distance (d) [m]",   subtitle_left=f"Distance variation - Keysize={keysize} bits",
+
+    skr_right=[df_k["R_sk-BB84+Eve"], df_k["R_sk-B92+Eve"], df_k["R_sk-COW+Eve"]],  
+    qber_right=[df_k["QBER-BB84+Eve"], df_k["QBER-B92+Eve"], df_k["QBER-COW+Eve"]],  
+    rs_right=[df_k["R_s-BB84+Eve"], df_k["R_s-B92+Eve"], df_k["R_s-COW+Eve"]],  
+    x_list_right=df_k["keysize"],   x_label_right="Key Size (k) [bit width]",  subtitle_right=f"Key size variation - Distance={channel_parameters[0]} meters",
+    title=f"Aten.={channel_parameters[1]} dB/m",
+    filename="eve_scenario"
+    )
 
 if __name__ == "__main__":
     main()
