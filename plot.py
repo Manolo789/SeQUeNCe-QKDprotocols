@@ -1,5 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
+import matplotlib as mpl
 import pandas as pd
 
 def safe_log10(lst: list) -> np.ndarray:
@@ -133,47 +134,53 @@ def plot_dual_graph(
     filename : str
         Output file saved as  data/{filename}_graph-dual.png
     """
- 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 10))
-    fig.suptitle(title, fontsize=14)
+    mpl.rcParams['xtick.labelsize'] = 14
+    mpl.rcParams['ytick.labelsize'] = 14
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+    #fig, axes = plt.subplots(2, 2, figsize=(18, 10))
+    fontsize = 15
+    fontsize_legend = 16
+    fig.suptitle(title, fontsize=fontsize, y=0.925)
  
     # ---- helper to draw one column ----
-    def _draw_column(ax_top, ax_bot, skr, qber, rs, x_list, x_label, subtitle):
+    def _draw_column(ax_top, ax_bot, skr, qber, rs, x_list, x_label, subtitle,
+                     show_left_ylabel=True, show_right_ylabel=True):
+
         x = np.array(x_list)
  
         # — Subtitle for this column —
-        ax_top.set_title(subtitle, fontsize=12)
+        ax_top.set_title(subtitle, fontsize=fontsize)
  
         # — Top subplot: R_sk (left axis) + QBER (right axis) —
-        ax_top.plot(x, safe_log10(skr[0]), linestyle=(0, (1, 1)),
+        ax_top.plot(x, safe_log10(skr[0]), linewidth=2, linestyle=(0, (1, 1)),
                     color='blue',  label="R_sk of the BB84")
-        ax_top.plot(x, safe_log10(skr[1]), linestyle=(0, (1, 5)),
+        ax_top.plot(x, safe_log10(skr[1]), linewidth=3, linestyle=(0, (1, 5)),
                     color='green', label="R_sk of the B92")
-        ax_top.plot(x, safe_log10(skr[2]), linestyle=(0, (1, 10)),
+        ax_top.plot(x, safe_log10(skr[2]), linewidth=5, linestyle=(0, (1, 10)),
                     color='red',   label="R_sk of the COW")
-        ax_top.set_ylabel("log₁₀ Secret Key Rate (R_sk)\n[bits per sent qubit]")
+        ax_top.set_ylabel("log₁₀ Secret Key Rate (R_sk)\n[bits per sent qubit]" if show_left_ylabel else "", fontsize=fontsize)
         ax_top.grid(True)
  
         ax_qber = ax_top.twinx()
-        ax_qber.plot(x, np.array(qber[0]) * 100, linestyle=(0, (5, 1)),
+        ax_qber.plot(x, np.array(qber[0]) * 100, linewidth=3, linestyle=(0, (5, 1)),
                      color='orange', label="QBER of the BB84")
-        ax_qber.plot(x, np.array(qber[1]) * 100, linestyle=(0, (5, 5)),
+        ax_qber.plot(x, np.array(qber[1]) * 100, linewidth=3, linestyle="solid",
                      color='maroon', label="QBER of the B92")
-        ax_qber.plot(x, np.array(qber[2]) * 100, linestyle=(0, (5, 10)),
-                     color='black',  label="QBER of the COW")
-        ax_qber.set_ylabel("QBER [%]")
+        ax_qber.plot(x, np.array(qber[2]) * 100, linewidth=3, linestyle=(0, (5, 10)),
+                     color='violet',  label="QBER of the COW")
+        ax_qber.set_ylabel("QBER [%]" if show_right_ylabel else "", fontsize=fontsize)
  
         # — Bottom subplot: R_s —
-        l1, = ax_bot.plot(x, np.array(rs[0]) * 100, linestyle="solid",
+        l1, = ax_bot.plot(x, np.array(rs[0]) * 100, linewidth=5, linestyle="solid",
                           color='grey',   label="BB84")
-        l2, = ax_bot.plot(x, np.array(rs[1]) * 100,
+        l2, = ax_bot.plot(x, np.array(rs[1]) * 100, linewidth=3,
                           linestyle=(0, (3, 1, 1, 1)),
                           color='cyan',   label="B92")
-        l3, = ax_bot.plot(x, np.array(rs[2]) * 100,
+        l3, = ax_bot.plot(x, np.array(rs[2]) * 100, linewidth=2,
                           linestyle=(0, (3, 1, 1, 1, 1, 1)),
-                          color='violet', label="COW")
-        ax_bot.set_xlabel(x_label)
-        ax_bot.set_ylabel("R_s - Useful bit rate [%]")
+                          color='black', label="COW")
+        ax_bot.set_xlabel(x_label, fontsize=fontsize)
+        ax_bot.set_ylabel("R_s - Useful bit rate [%]" if show_left_ylabel else "", fontsize=fontsize)
         ax_bot.grid(True)
  
         # Collect all line handles for the shared legend
@@ -186,6 +193,7 @@ def plot_dual_graph(
         axes[0, 0], axes[1, 0],
         skr_left, qber_left, rs_left,
         x_list_left, x_label_left, subtitle_left,
+        show_left_ylabel=True, show_right_ylabel=False
     )
  
     # ---- right column (e.g. key size) ----
@@ -193,16 +201,18 @@ def plot_dual_graph(
         axes[0, 1], axes[1, 1],
         skr_right, qber_right, rs_right,
         x_list_right, x_label_right, subtitle_right,
+        show_left_ylabel=False, show_right_ylabel=True
     )
  
     # ---- single shared legend at the bottom ----
     labels = [l.get_label() for l in lines_left]
     fig.legend(lines_left, labels,
                loc='lower center',
-               bbox_to_anchor=(0.5, -0.02),
-               fancybox=True, shadow=True, ncol=5)
+               bbox_to_anchor=(0.5, -0.01),
+               fancybox=True, shadow=True, ncol=5, fontsize=fontsize_legend, markerscale=3)
  
-    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    plt.tight_layout(rect=[0, 0.08, 1, 0.96])
+    #plt.tight_layout(rect=[0.04, 0.12, 0.96, 0.90])
     plt.savefig(f"data/{filename}_graph-dual.png",
                 dpi=300, bbox_inches='tight')
     plt.close() 
@@ -213,7 +223,6 @@ def main():
     keysize = 10000
     df_d = pd.read_csv('data/metrics_variable-distance.csv')
     df_k = pd.read_csv('data/metrics_variable-keysize.csv')
-
 
     plot_graph(skr=[df_d["R_sk-BB84"], df_d["R_sk-B92"], df_d["R_sk-COW"]], 
            skr_Eve=[df_d["R_sk-BB84+Eve"], df_d["R_sk-B92+Eve"], df_d["R_sk-COW+Eve"]], 
