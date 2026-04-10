@@ -102,7 +102,8 @@ class QuantumChannel(OpticalChannel):
     """
 
     def __init__(self, name: str, timeline: "Timeline", attenuation: float, distance: float,
-                 polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, phase_noise_coefficient: float = 0.0):
+                 polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, phase_noise_coefficient: float = 0.0,
+                 loss: "float | None" = None):
         """Constructor for Quantum Channel class.
 
         Args:
@@ -125,13 +126,17 @@ class QuantumChannel(OpticalChannel):
         self.frequency: float = frequency  # maximum frequency for sending qubits (measured in Hz)
         self.send_bins: list = []
         self.phase_noise_coefficient: float = phase_noise_coefficient
-
+        self._loss_spec = loss  # None → default formula, float → fixed
 
     def init(self) -> None:
         """Implementation of Entity interface (see base class)."""
 
         self.delay = round(self.distance / self.light_speed)
-        self.loss = 1 - 10 ** (self.distance * self.attenuation / -10)
+        if self._loss_spec is None:
+            self.loss = 1 - 10 ** (self.distance * self.attenuation / -10)
+        else:
+            self.loss = float(self._loss_spec)
+        
 
     def set_ends(self, sender: "Node", receiver: str) -> None:
         """Method to set endpoints for the quantum channel.
@@ -332,7 +337,8 @@ class EveQuantumChannel(QuantumChannel):
     """
 
     def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
-        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0) -> None:
+        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, 
+        loss: "float | None" = None) -> None:
         """
         Args:
             name:                 nome do canal.
@@ -355,6 +361,7 @@ class EveQuantumChannel(QuantumChannel):
             light_speed=light_speed,
             frequency=frequency,
             phase_noise_coefficient=phase_noise_coefficient,
+            loss=loss,
         )
         self.eve_node: "EveNode" = eve_node
         self.eve_position: float = eve_position
@@ -395,6 +402,7 @@ class EveQuantumChannel(QuantumChannel):
             light_speed=self.light_speed,
             frequency=self.frequency,
             phase_noise_coefficient=self.phase_noise_coefficient,
+            loss=loss,
         )
         # Registra _seg2 em Eve com a chave 'bob'.
         # Eve chamará eve.send_qubit('bob') após intercepção.

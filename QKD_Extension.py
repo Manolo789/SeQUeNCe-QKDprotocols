@@ -14,6 +14,7 @@ from sequence.qkd.B92 import pair_b92_protocols
 from sequence.qkd.COW import pair_cow_protocols
 from sequence.topology.node import QKDNode, EveNode
 from sequence.utils.encoding_cow import time_bin_cow
+from QCLoss.loss import channel_FSO_loss
 import sequence.utils.log as log
 import numpy as np
 import pandas as pd
@@ -83,7 +84,7 @@ def _collect_cow_metrics(protocol, visibility, ls_params, distance: float, atten
 
 
 
-def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp"):
+def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp", loss=None):
     tl = Timeline(runtime*1e9)
     tl.show_progress = False
 
@@ -95,8 +96,8 @@ def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, dis
         #log.track_module('timeline')
         log.track_module('light_source')
 
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
     cc0.delay += 1e9  # 1 ms
@@ -133,7 +134,7 @@ def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, dis
 
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
-def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp"):
+def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp", loss=None):
     tl = Timeline(runtime*1e9)
     tl.show_progress = False
 
@@ -145,8 +146,8 @@ def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, dist
         #log.track_module('timeline')
         log.track_module('light_source')
 
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
     cc0.delay += 1e9  # 1 ms
@@ -184,7 +185,7 @@ def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, dist
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
 
-def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20):
+def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20, loss=None):
     tl = Timeline(runtime*1e9)
     tl.show_progress = False
 
@@ -196,8 +197,8 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
         #log.track_module('timeline')
         log.track_module('light_source')
 
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient)
+    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
     cc0.delay += 1e9  # 1 ms
@@ -246,7 +247,7 @@ def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, dist
     return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s, VISIBILITY
     
     
-def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 0.9, eve_position = 0.5, source_type="wcp"):
+def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 0.9, eve_position = 0.5, source_type="wcp", loss=None):
     tl = Timeline(runtime * 1e9)
     tl.show_progress = False
     if log_filename != -1:
@@ -256,8 +257,8 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
         log.track_module('light_source')
 
     eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, loss=loss)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
     
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
@@ -288,7 +289,7 @@ def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1,
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
     
 
-def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 0.9, eve_position = 0.5, source_type="wcp"):
+def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 0.9, eve_position = 0.5, source_type="wcp", loss=None):
     tl = Timeline(runtime * 1e9)
     tl.show_progress = False
     if log_filename != -1:
@@ -298,8 +299,8 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
         log.track_module('light_source')
 
     eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, loss=loss)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
     
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
@@ -329,7 +330,7 @@ def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
     tl.run()
     return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
 
-def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20, eve_intercept_rate = 0.9, eve_position = 0.5):
+def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20, eve_intercept_rate = 0.9, eve_position = 0.5, loss=None):
     tl = Timeline(runtime * 1e9)
     tl.show_progress = False
     if log_filename != -1:
@@ -339,8 +340,8 @@ def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, 
         log.track_module('light_source')
 
     eve = EveNode("eve", tl, encoding=time_bin_cow, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, phase_noise_coefficient=phase_noise_coefficient)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient)
+    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
+    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
     
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
@@ -522,7 +523,7 @@ def _worker_keysize(task: dict):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params_cow, ls_params,
-                          detector_params, detector_params_cow, keysize, key_num):
+                          detector_params, detector_params_cow, keysize, key_num, loss_parameters):
     """Build a flat list of task dicts for every (protocol × distance) pair."""
     att  = channel_parameters[1]
     pfid = channel_parameters[2]
@@ -531,43 +532,55 @@ def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params_cow, ls
     for d in d_list:
         common = dict(runtime=runtime, distance=d,
                       polarization_fidelity=pfid, attenuation=att, keysize=keysize, key_num=key_num)
+        loss = channel_FSO_loss(distance=d, wavelength=ls_params["wavelength"], v_range=loss_parameters["v_range"],
+                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"],
+                     size_raindrop=loss_parameters["size_raindrop"], viscosity=loss_parameters["viscosity"], precipitation_rate=loss_parameters["precipitation_rate"], Q_scat=loss_parameters["Q_scat"])
 
         tasks.append({"protocol": "BB84", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "B92", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "COW", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow}})
+                                 "detector_params": detector_params_cow,
+                                 "loss": loss}})
 
         tasks.append({"protocol": "BB84+Eve", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "B92+Eve", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "COW+Eve", "distance": d,
                       "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow}})
+                                 "detector_params": detector_params_cow,
+                                 "loss": loss}})
     return tasks
 
 
 def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params_cow, ls_params,
-                         detector_params, detector_params_cow, key_num):
+                         detector_params, detector_params_cow, key_num, loss_parameters):
     """Build a flat list of task dicts for every (protocol × keysize) pair."""
     dist = channel_parameters[0]
     att  = channel_parameters[1]
     pfid = channel_parameters[2]
+    loss = channel_FSO_loss(distance=dist, wavelength=ls_params["wavelength"], v_range=loss_parameters["v_range"],
+                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"],
+                     size_raindrop=loss_parameters["size_raindrop"], viscosity=loss_parameters["viscosity"], precipitation_rate=loss_parameters["precipitation_rate"], Q_scat=loss_parameters["Q_scat"])
     tasks = []
 
     for k in keysize_list:
@@ -577,30 +590,36 @@ def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params_co
         tasks.append({"protocol": "BB84", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "B92", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "COW", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow}})
+                                 "detector_params": detector_params_cow,
+                                 "loss": loss}})
 
         tasks.append({"protocol": "BB84+Eve", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "B92+Eve", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params,
                                  "detector_params": detector_params,
-                                 "source_type": "sps"}})
+                                 "source_type": "sps",
+                                 "loss": loss}})
 
         tasks.append({"protocol": "COW+Eve", "keysize": k,
                       "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow}})
+                                 "detector_params": detector_params_cow,
+                                 "loss": loss}})
     return tasks
 
 
@@ -686,7 +705,7 @@ def _collect_keysize_results(keysize_list, results_list):
 
 def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
                           ls_params_cow, ls_params, detector_params, detector_params_cow,
-                          keysize, key_num, max_workers=None):
+                          keysize, key_num, loss_parameters, max_workers=None):
     """Parallel version of the original sim_variable_distance.
 
     Args:
@@ -700,7 +719,7 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
         
     tasks = _build_distance_tasks(
         runtime, d_list, channel_parameters,
-        ls_params_cow, ls_params, detector_params, detector_params_cow, keysize, key_num)
+        ls_params_cow, ls_params, detector_params, detector_params_cow, keysize, key_num, loss_parameters)
 
     total = len(tasks)
     results_list = []
@@ -738,14 +757,14 @@ def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
 
 def sim_variable_keysize(runtime, keysize_list, channel_parameters,
                          ls_params_cow, ls_params, detector_params, detector_params_cow, key_num,
-                         max_workers=None):
+                         loss_parameters, max_workers=None):
     """Parallel version of the original sim_variable_keysize."""
     if max_workers is None:
         max_workers = os.cpu_count() or 4
 
     tasks = _build_keysize_tasks(
         runtime, keysize_list, channel_parameters,
-        ls_params_cow, ls_params, detector_params, detector_params_cow, key_num)
+        ls_params_cow, ls_params, detector_params, detector_params_cow, key_num, loss_parameters)
 
     total = len(tasks)
     results_list = []
@@ -795,8 +814,27 @@ def run_simulation():
     key_num = 1
     # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
     channel_parameters = (700, 0.0002, 0.97)
-    sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num)
-    sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num)
+    
+    # Source of information on the factors that influence signal loss:
+    # From transmitter:
+    #     w_0:
+    #     R_0: para feixes colimados, adota-se R_0 = math.inf
+    # From receiver:
+    #     receiver_radius: 
+    # From channel:
+    #     v_range:
+    #     pressure: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+    #     temperature: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+    #     C_T:
+    #     size_raindrop:
+    #     viscosity:
+    #     precipitation_rate: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+    #     Q_scat:
+    loss_parameters = {"v_range":,
+                       "receiver_radius":, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf,
+                       "size_raindrop":, "viscosity":, "precipitation_rate":, "Q_scat":}
+    sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num, loss_parameters=loss_parameters)
+    sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num, loss_parameters=loss_parameters)
 
     end = time.time()
     
