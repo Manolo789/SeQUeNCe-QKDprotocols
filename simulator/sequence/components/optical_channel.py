@@ -402,7 +402,7 @@ class EveQuantumChannel(QuantumChannel):
             light_speed=self.light_speed,
             frequency=self.frequency,
             phase_noise_coefficient=self.phase_noise_coefficient,
-            loss=loss,
+            loss=self._loss_spec,
         )
         # Registra _seg2 em Eve com a chave 'bob'.
         # Eve chamará eve.send_qubit('bob') após intercepção.
