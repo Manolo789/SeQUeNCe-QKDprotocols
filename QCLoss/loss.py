@@ -70,9 +70,11 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         viscosity: Viscosidade do ar [(g/cm)s]
         precipitation_rate: Taxa e precipitação [cm/s]
         Q_scat: Eficiência de dispersão
-        density = 1: Densidade da água [g/cm²]
+        density = 1: Densidade da água [g/cm³]
         gravitation = 980: Aceleração da gravidade [cm/s²]
     '''
+    wavelength_m = wavelength * 1e-9 # nm to m
+    distance_m = distance * 1e3 # km to m
     # Fog Attenuation
     
     # Using Kim's model for the dispersion parameter
@@ -93,18 +95,18 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     eta_fog = math.exp(-distance*(beta_fog))
         
     # Atmospheric turbulence
-    C_n2 = ((77.6*pressure/(temperature**2))*((1+0.00753)/(wavelength**2))*C_T*0.000001)**(0.5) # Parâmetro do índice de refração
-    k_wave = 2*math.pi/wavelength # Número de onda
-    Z_R = (math.pi*w_0**2)/wavelength # Comprimento do feixe de Rayleigh
-    A_rytov = 1.23*(k_wave**(7/6))*C_n2*(distance**(11/6)) # Parâmetro de Rytov
-    w_z2 = (w_0**2)*((1-(distance/R_0))**2 + (distance/Z_R)**2)
-    w_lt = w_z*(1+1.63*A_rytov*((2*distance)/(k_wave*w_z2))) # Effective beam waist
-    eta_turb = 1 - math.exp((2*receiver_radius**2)/(w_lt**2))
+    C_n2 = (((77.6*1e-6*pressure)/(temperature**2))**2)*(((1+0.00753)/((wavelength/1000)**2))**2)*C_T**2 # Parâmetro do índice de refração
+    k_wave = 2*math.pi/wavelength_m # Número de onda
+    Z_R = (math.pi*w_0**2)/wavelength_m # Comprimento do feixe de Rayleigh
+    A_rytov = 1.23*(k_wave**(7/6))*C_n2*(distance_m**(11/6)) # Parâmetro de Rytov
+    w_z2 = (w_0**2)*((1-(distance_m/R_0))**2 + (distance_m/Z_R)**2)
+    w_lt = (w_z2**(1/2))*(1+1.63*A_rytov*((2*distance_m)/(k_wave*w_z2))) # Effective beam waist
+    eta_turb = 1 - math.exp(-(2*receiver_radius**2)/(w_lt**2))
 
     # Rain attenuation    
-    limit_s_precipitation = (2*(size_raindrop**2)*density*gravitation)/(9*viscosity)# Velociade limite de precipitação
+    limit_s_precipitation = (2*(size_raindrop**2)*density*gravitation)/(9*viscosity)# Velocidade limite de precipitação
     concentration_raindrop = precipitation_rate/((4/3)*math.pi*(size_raindrop**3)*limit_s_precipitation) # Concentração da gotícula de chuva (Distribuição da gota da chuva)
     beta_rain = (math.pi*(size_raindrop**2)*concentration_raindrop*Q_scat)
-    eta_rain = math.exp(-beta_rain*distance)
+    eta_rain = math.exp(-beta_rain*distance*1e5)
         
     return 1 - (eta_fog*eta_rain*eta_turb)
