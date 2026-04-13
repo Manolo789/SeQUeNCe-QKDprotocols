@@ -38,7 +38,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import math
 
 def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
-                     receiver_radius: float, pressure: float, temperature: float, w_0: float, C_T: float, R_0: float,
+                     receiver_radius: float, pressure: float, temperature: float, w_0: float, C_T: float, R_0: float, friction_velocity: float, height: float,
                      size_raindrop: float, viscosity: float, precipitation_rate: float, Q_scat: float, density: float = 1.0, gravitation: float = 980.0):
     '''
     The implementation of the attenuation system in the channel was 
@@ -65,6 +65,9 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         w_0: Raio inicial do feixe gaussiano (característica do emissor) [cm]
         C_T: Constante de estrutura de temperatura
         R_0: Raio de curvatura inicial da frente de onda do feixe gaussiano (para feixes colimados, adota-se R_0 = math.inf)
+        air_density: Densidade do ar [g/cm³]
+        friction_velocity: Velocidade de atrito [cm/s]
+        height: Altura acima do solo [cm]
         
         size_raindrop: Raio da gota de chuva [cm]
         viscosity: Viscosidade do ar [(g/cm)s]
@@ -74,6 +77,20 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         gravitation = 980: Aceleração da gravidade [cm/s²]
     '''
     wavelength_m = wavelength * 1e-9 # nm to m
+    # C_Tatarskii: A constante de Tatarskii relaciona l0_parameter à microescala de Kolmogorov (ref: Andrews & Phillips, Cap. 3).
+    C_Tatarskii = 7.4
+    M_air = 28.9645 # g/mol
+    R_ideal = 0.0820574587 # L * atm * K^-1 * mol^-1
+    air_density = (M_air*(pressure/1013,25))/(1000*R_ideal*temperature)
+    
+    # l0_parameter: Medida das distâncias mínimas ao longo das quais as flutuações no índice de refração estão correlacionadas
+    # l0_parameter = C_Tatarskii*(ν³/ε)**(1/4)
+    # ν: viscosidade cinemática (ν = viscosidade_dinâmica/densidade_do_ar)
+    # ε: taxa de dissipação de energia turbulenta. A partir da velocidade do vento e da altura, 
+    # usando a teoria da camada limite atmosférica: ε ≈ velocidade_de_atrito³/(κ*h),
+    # onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
+    l0_parameter = C_Tatarskii*(((viscosity/air_density)**3)/((friction_velocity**3)/(0.4*height)))**(1/4) 
+
     # Fog Attenuation
     
     # Using Kim's model for the dispersion parameter
@@ -90,7 +107,7 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     else:
         delta = None # v_range is outside the allowed range or has inconsistent values.
 
-    beta_fog = (3.92/v_range)*((wavelength/550)**(-delta))
+    beta_fog = (3.91/v_range)*((wavelength/550)**(-delta))
     eta_fog = math.exp(-distance*(beta_fog)*1e-3)
     
     # Atmospheric turbulence
@@ -98,8 +115,12 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     k_wave = 2*math.pi/wavelength_m # Número de onda
     Z_R = (math.pi*(w_0*0.01)**2)/wavelength_m # Comprimento do feixe de Rayleigh
     A_rytov = 1.23*(k_wave**(7/6))*C_n2*(distance**(11/6)) # Parâmetro de Rytov
-    w_z2 = ((w_0*0.01)**2)*((1-(distance/R_0))**2 + (distance/Z_R)**2)
-    w_lt2 = w_z2*(1+1.63*A_rytov*((2*distance)/(k_wave*w_z2)))**2 # Effective beam waist
+    w_z2 = ((w_0*0.01)**2)*((1-(distance/(R_0*0.01)))**2 + (distance/Z_R)**2)
+    zi_parameter = 1/(C_n2*(k_wave**2)*(l0_parameter**(5/3)))
+    if distance > zi_parameter:
+        w_lt2 = w_z2*(1+0.74*(4/3)*A_rytov*(((35.05*distance)/(k_wave*l0_parameter**2))**(1/6))*((2*distance)/(k_wave*w_z2))) # Effective beam waist for 
+    elif distance < zi_parameter:
+        w_lt2 = w_z2*(1+1.63*(A_rytov**(6/5))*((2*distance)/(k_wave*w_z2))) # Effective beam waist
     eta_turb = 1 - math.exp(-(2*(receiver_radius*0.01)**2)/(w_lt2))
 
     # Rain attenuation    

@@ -533,7 +533,7 @@ def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params_cow, ls
         common = dict(runtime=runtime, distance=d,
                       polarization_fidelity=pfid, attenuation=att, keysize=keysize, key_num=key_num)
         loss = channel_FSO_loss(distance=d, wavelength=ls_params["wavelength"], v_range=loss_parameters["v_range"],
-                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"],
+                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"], friction_velocity=loss_parameters["friction_velocity"], height=loss_parameters["height"],
                      size_raindrop=loss_parameters["size_raindrop"], viscosity=loss_parameters["viscosity"], precipitation_rate=loss_parameters["precipitation_rate"], Q_scat=loss_parameters["Q_scat"])
 
         tasks.append({"protocol": "BB84", "distance": d,
@@ -579,7 +579,7 @@ def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params_co
     att  = channel_parameters[1]
     pfid = channel_parameters[2]
     loss = channel_FSO_loss(distance=dist, wavelength=ls_params["wavelength"], v_range=loss_parameters["v_range"],
-                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"],
+                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"], friction_velocity=loss_parameters["friction_velocity"], height=loss_parameters["height"],
                      size_raindrop=loss_parameters["size_raindrop"], viscosity=loss_parameters["viscosity"], precipitation_rate=loss_parameters["precipitation_rate"], Q_scat=loss_parameters["Q_scat"])
     tasks = []
 
@@ -819,8 +819,10 @@ def run_simulation():
     # From transmitter:
     #     w_0:
     #     R_0: para feixes colimados, adota-se R_0 = math.inf
+    #     transmitter_height:
     # From receiver:
-    #     receiver_radius: 
+    #     receiver_radius:
+    #     receiver_height:
     # From channel:
     #     v_range:
     #     pressure: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
@@ -830,8 +832,10 @@ def run_simulation():
     #     viscosity:
     #     precipitation_rate: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
     #     Q_scat:
+    #     friction_velocity: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+    #     height = (transmitter_height+receiver_height)/2
     loss_parameters = {"v_range":,
-                       "receiver_radius":, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf,
+                       "receiver_radius":, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf, "friction_velocity":, "height":,
                        "size_raindrop":, "viscosity":, "precipitation_rate":, "Q_scat":}
     sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num, loss_parameters=loss_parameters)
     sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num, loss_parameters=loss_parameters)
