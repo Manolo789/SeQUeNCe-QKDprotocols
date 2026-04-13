@@ -11,6 +11,7 @@ To install the modified simulator and run the extension, proceed as follows:
 ```
 git clone https://github.com/Manolo789/SeQUeNCe-QKDprotocols.git
 cd SeQUeNCe-QKDprotocols/simulator/
+pip install miepython
 python3 -m venv .venv
 pip install --break-system-packages --editable .
 cd ..
