@@ -35,7 +35,23 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ============================================================================
 
 """
+import miepython
 import math
+
+def n_value(wavelength: float, temperature: float, salinity: int = 0):
+    '''
+    Calculation of the refractive index of a raindrop.
+    Based on the results of the article:
+    
+    Xiaohong Quan and Edward S. Fry, "Empirical equation for the index of 
+     refraction of seawater," Appl. Opt. 34, 3477-3480 (1995) 
+    '''
+    T_C = temperature_K - 273.15 
+    lam = wavelength_nm
+    S = salinity
+    n = 1.31405 + (1.779e-4 - 1.05e-6*T_C + 1.6e-8*T_C**2)*S - 2.02e6*T_C + (15.868 + 0.01155*S - 0.00423*T_C)/lem - 4382/lem**2 + 1.1455e6/lem**3
+    return s
+
 
 def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
                      receiver_radius: float, pressure: float, temperature: float, w_0: float, C_T: float, R_0: float, friction_velocity: float, height: float,
@@ -68,6 +84,7 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         air_density: Densidade do ar [g/cm³]
         friction_velocity: Velocidade de atrito [cm/s]
         height: Altura acima do solo [cm]
+        l0_parameter: Medida das distâncias mínimas ao longo das quais as flutuações no índice de refração estão correlacionadas [m]
         
         size_raindrop: Raio da gota de chuva [cm]
         viscosity: Viscosidade do ar [(g/cm)s]
@@ -77,19 +94,25 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         gravitation = 980: Aceleração da gravidade [cm/s²]
     '''
     wavelength_m = wavelength * 1e-9 # nm to m
+    # Cálculo da Viscosidade Dinâmica: Equação de Sutherland (mu = mu_0*((T_0+S)/(T+S))*(T/T_0)**(3/2)) 
+    # mu_0 = 1.716*1e-5 Kg * m^-1 * s^-1
+    # T_0 = 273.15 K
+    # S = 110.4 K
+    if viscosity == None:
+        viscosity = 1.716*1e-4*((273.15+110.4)/(temperature+110.4))*(temperature/273.15)**(3/2)
+        
     # C_Tatarskii: A constante de Tatarskii relaciona l0_parameter à microescala de Kolmogorov (ref: Andrews & Phillips, Cap. 3).
     C_Tatarskii = 7.4
     M_air = 28.9645 # g/mol
     R_ideal = 0.0820574587 # L * atm * K^-1 * mol^-1
-    air_density = (M_air*(pressure/1013,25))/(1000*R_ideal*temperature)
+    air_density = (M_air*(pressure/1013.25))/(1000*R_ideal*temperature)
     
-    # l0_parameter: Medida das distâncias mínimas ao longo das quais as flutuações no índice de refração estão correlacionadas
     # l0_parameter = C_Tatarskii*(ν³/ε)**(1/4)
     # ν: viscosidade cinemática (ν = viscosidade_dinâmica/densidade_do_ar)
     # ε: taxa de dissipação de energia turbulenta. A partir da velocidade do vento e da altura, 
     # usando a teoria da camada limite atmosférica: ε ≈ velocidade_de_atrito³/(κ*h),
     # onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
-    l0_parameter = C_Tatarskii*(((viscosity/air_density)**3)/((friction_velocity**3)/(0.4*height)))**(1/4) 
+    l0_parameter = 0.01*C_Tatarskii*(((viscosity/air_density)**3)/((friction_velocity**3)/(0.4*height)))**(1/4) 
 
     # Fog Attenuation
     
@@ -117,16 +140,19 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     A_rytov = 1.23*(k_wave**(7/6))*C_n2*(distance**(11/6)) # Parâmetro de Rytov
     w_z2 = ((w_0*0.01)**2)*((1-(distance/(R_0*0.01)))**2 + (distance/Z_R)**2)
     zi_parameter = 1/(C_n2*(k_wave**2)*(l0_parameter**(5/3)))
-    if distance > zi_parameter:
+    if distance >= zi_parameter:
         w_lt2 = w_z2*(1+0.74*(4/3)*A_rytov*(((35.05*distance)/(k_wave*l0_parameter**2))**(1/6))*((2*distance)/(k_wave*w_z2))) # Effective beam waist for 
     elif distance < zi_parameter:
         w_lt2 = w_z2*(1+1.63*(A_rytov**(6/5))*((2*distance)/(k_wave*w_z2))) # Effective beam waist
     eta_turb = 1 - math.exp(-(2*(receiver_radius*0.01)**2)/(w_lt2))
 
     # Rain attenuation    
+    if Q_scat == None:
+        m_water = n_value(wavelength, temperature) + 0j
+        Q_scat, _, _, _ = miepython.efficiencies_mx(m_water, (2*math.pi*size_raindrop/wavelength*1e-7))
     limit_s_precipitation = (2*(size_raindrop**2)*density*gravitation)/(9*viscosity)# Velocidade limite de precipitação
     concentration_raindrop = precipitation_rate/((4/3)*math.pi*(size_raindrop**3)*limit_s_precipitation) # Concentração da gotícula de chuva (Distribuição da gota da chuva)
-    beta_rain = (math.pi*(size_raindrop**2)*concentration_raindrop*Q_scat)
+    beta_rain = (math.pi*(size_raindrop**3)*concentration_raindrop*Q_scat/(wavelength*1e-7))
     eta_rain = math.exp(-beta_rain*distance*1e2)
         
     return 1 - (eta_fog*eta_rain*eta_turb)

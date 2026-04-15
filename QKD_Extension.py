@@ -829,14 +829,16 @@ def run_simulation():
     #     temperature: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
     #     C_T:
     #     size_raindrop:
-    #     viscosity:
+    #     viscosity: Sutherland, W. (1893), "The viscosity of gases and molecular force", Philosophical Magazine, S. 5, 36, pp. 507-531 (1893).
     #     precipitation_rate: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
-    #     Q_scat:
+    #     Q_scat: Calculado utilizando 'Prahl, S. (2026). miepython: Pure python calculation of Mie scattering (Version 3.2.0) 
+    #               [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.7949263' e 'Xiaohong Quan and Edward S. Fry, "Empirical equation for the index of 
+    #               refraction of seawater," Appl. Opt. 34, 3477-3480 (1995)'
     #     friction_velocity: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
     #     height = (transmitter_height+receiver_height)/2
     loss_parameters = {"v_range":,
                        "receiver_radius":, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf, "friction_velocity":, "height":,
-                       "size_raindrop":, "viscosity":, "precipitation_rate":, "Q_scat":}
+                       "size_raindrop":, "viscosity":None, "precipitation_rate":, "Q_scat":2}
     sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num, loss_parameters=loss_parameters)
     sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num, loss_parameters=loss_parameters)
 
