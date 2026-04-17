@@ -5,7 +5,7 @@ This extension to the SeQUENCe simulator adds the B92 and COW protocols. Additio
 This extension emerged from the scientific initiation project 'Simulation and Testing for Performance Analysis of Communication Protocols in Quantum Networks' at the Laboratory of Computer Architecture and Networks ([LARC](https://www.larc.usp.br/) in Portuguese), a laboratory of the Department of Computer Engineering and Digital Systems of the Polytechnic School of the University of São Paulo (PCS-EPUSP), using resources from the Unified Scholarship Program ([PUB - Programa Unificado de Bolsas](https://prip.usp.br/apoio-estudantil/pub/)).
 
 
-# Quantum channel in free space (QC in FS)
+### Quantum channel in free space (QC in FS)
 This branch is responsible for the development of a quantum channel model implementation that considers free space links. *The code is under development!*
 
 ## Installing
