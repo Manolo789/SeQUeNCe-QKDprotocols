@@ -1,6 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib as mpl
+import matplotlib.patches as mpatches
 import pandas as pd
 
 def safe_log10(lst: list) -> np.ndarray:
@@ -27,22 +28,23 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title,
     # R_sk(x)
     fig, (ax1, ax3) = plt.subplots(2, figsize=(12, 6), sharex=True)
     fig.suptitle(title)
-    linha_y1, = ax1.plot(np.array(x_list), safe_log10(skr[0]), linestyle=(0, (1, 1)), color='blue', label="R_sk of the BB84")
-    linha_y2, = ax1.plot(np.array(x_list), safe_log10(skr[1]), linestyle=(0, (1, 5)), color='green', label="R_sk of the B92")
-    linha_y3, = ax1.plot(np.array(x_list), safe_log10(skr[2]), linestyle=(0, (1, 10)), color='red', label="R_sk of the COW")
-    ax1.set_ylabel("log₁₀ Secret Key Rate (R_sk)\n[bits per sent qubit]")
+    # Taxa X do BB84
+    linha_y1, = ax1.plot(np.array(x_list), safe_log10(skr[0]), linestyle=(0, (1, 1)), color='blue', label="R_sk do BB84")
+    linha_y2, = ax1.plot(np.array(x_list), safe_log10(skr[1]), linestyle=(0, (1, 5)), color='green', label="R_sk do B92")
+    linha_y3, = ax1.plot(np.array(x_list), safe_log10(skr[2]), linestyle=(0, (1, 10)), color='red', label="R_sk do COW")
+    ax1.set_ylabel("log₁₀ Taxa de chave secreta (R_sk)\n[bits por qubit enviado]")
     # QBER(x)
     ax2 = ax1.twinx()
-    linha_z1, = ax2.plot(np.array(x_list), np.array(qber[0])*100, linestyle=(0, (5, 1)), color='orange', label="QBER of the BB84")
-    linha_z2, = ax2.plot(np.array(x_list), np.array(qber[1])*100, linestyle=(0, (5, 5)), color='maroon', label="QBER of the B92")
-    linha_z3, = ax2.plot(np.array(x_list), np.array(qber[2])*100, linestyle=(0, (5, 10)), color='black', label="QBER of the COW")
+    linha_z1, = ax2.plot(np.array(x_list), np.array(qber[0])*100, linestyle=(0, (5, 1)), color='orange', label="QBER do BB84")
+    linha_z2, = ax2.plot(np.array(x_list), np.array(qber[1])*100, linestyle=(0, (5, 5)), color='maroon', label="QBER do B92")
+    linha_z3, = ax2.plot(np.array(x_list), np.array(qber[2])*100, linestyle=(0, (5, 10)), color='black', label="QBER do COW")
     ax2.set_ylabel("QBER [%]")
     # R_s(x)
     linha_w1, = ax3.plot(np.array(x_list), np.array(rs[0])*100, linestyle="solid", color='grey', label="BB84")
     linha_w2, = ax3.plot(np.array(x_list), np.array(rs[1])*100, linestyle=(0, (3, 1, 1, 1)), color='cyan', label="B92")
     linha_w3, = ax3.plot(np.array(x_list), np.array(rs[2])*100, linestyle=(0, (3, 1, 1, 1, 1, 1)), color='violet', label="COW")
     ax3.set_xlabel(x_label)
-    ax3.set_ylabel("R_s - Useful bit rate [%]")
+    ax3.set_ylabel("R_s - Taxa de bits úteis [%]")
 
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3, linha_w1, linha_w2, linha_w3]
     labels = [l.get_label() for l in linhas]
@@ -57,22 +59,22 @@ def plot_graph(skr, skr_Eve, qber, qber_Eve, rs, rs_Eve, x_list, x_label, title,
     # R_sk(x)
     fig, (ax1, ax3) = plt.subplots(2, figsize=(12, 6), sharex=True)
     fig.suptitle(title)
-    linha_y1, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[0]), linestyle=(0, (1, 1)), color='blue', label="R_sk of the BB84+Eve")
-    linha_y2, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[1]), linestyle=(0, (1, 5)), color='green', label="R_sk of the B92+Eve")
-    linha_y3, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[2]), linestyle=(0, (1, 10)), color='red', label="R_sk of the COW+Eve")
-    ax1.set_ylabel("log₁₀ Secret Key Rate (R_sk)\n[bits per sent qubit]")
+    linha_y1, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[0]), linestyle=(0, (1, 1)), color='blue', label="R_sk do BB84+Eve")
+    linha_y2, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[1]), linestyle=(0, (1, 5)), color='green', label="R_sk do B92+Eve")
+    linha_y3, = ax1.plot(np.array(x_list), safe_log10(skr_Eve[2]), linestyle=(0, (1, 10)), color='red', label="R_sk do COW+Eve")
+    ax1.set_ylabel("log₁₀ Taxa de chave secreta (R_sk)\n[bits por qubit enviado]")
     # QBER(x)
     ax2 = ax1.twinx()
-    linha_z1, = ax2.plot(np.array(x_list), np.array(qber_Eve[0])*100, linestyle=(0, (5, 1)), color='orange', label="QBER of the BB84+Eve")
-    linha_z2, = ax2.plot(np.array(x_list), np.array(qber_Eve[1])*100, linestyle=(0, (5, 5)), color='maroon', label="QBER of the B92+Eve")
-    linha_z3, = ax2.plot(np.array(x_list), np.array(qber_Eve[2])*100, linestyle=(0, (5, 10)), color='black', label="QBER of the COW+Eve")
+    linha_z1, = ax2.plot(np.array(x_list), np.array(qber_Eve[0])*100, linestyle=(0, (5, 1)), color='orange', label="QBER do BB84+Eve")
+    linha_z2, = ax2.plot(np.array(x_list), np.array(qber_Eve[1])*100, linestyle=(0, (5, 5)), color='maroon', label="QBER do B92+Eve")
+    linha_z3, = ax2.plot(np.array(x_list), np.array(qber_Eve[2])*100, linestyle=(0, (5, 10)), color='black', label="QBER do COW+Eve")
     ax2.set_ylabel("QBER [%]")
     # R_s(x)
     linha_w1, = ax3.plot(np.array(x_list), np.array(rs_Eve[0])*100, linestyle="solid", color='grey', label="BB84+Eve")
     linha_w2, = ax3.plot(np.array(x_list), np.array(rs_Eve[1])*100, linestyle=(0, (3, 1, 1, 1)), color='cyan', label="B92+Eve")
     linha_w3, = ax3.plot(np.array(x_list), np.array(rs_Eve[2])*100, linestyle=(0, (3, 1, 1, 1, 1, 1)), color='violet', label="COW+Eve")
     ax3.set_xlabel(x_label)
-    ax3.set_ylabel("R_s - Useful bit rate [%]")
+    ax3.set_ylabel("R_s - Taxa de bits úteis [%]")
 
     linhas = [linha_y1, linha_y2, linha_y3, linha_z1, linha_z2, linha_z3, linha_w1, linha_w2, linha_w3]
     labels = [l.get_label() for l in linhas]
@@ -96,10 +98,10 @@ def plot_v(visibility, visibility_Eve, x_list, x_label, title, filename):
     # R_sk(x)
     fig, ax1 = plt.subplots(figsize=(12, 6))
     fig.suptitle(title)
-    linha_y1, = ax1.plot(np.array(x_list), visibility, linestyle=(0, (1, 1)), color='blue', label="V of the COW")
-    linha_y2, = ax1.plot(np.array(x_list), visibility_Eve, linestyle=(0, (3, 1, 1, 1, 1, 1)), color='green', label="V of the COW+Eve")
+    linha_y1, = ax1.plot(np.array(x_list), visibility, linestyle=(0, (1, 1)), color='blue', label="V do COW")
+    linha_y2, = ax1.plot(np.array(x_list), visibility_Eve, linestyle=(0, (3, 1, 1, 1, 1, 1)), color='green', label="V do COW+Eve")
     ax1.set_xlabel(x_label)
-    ax1.set_ylabel("V - Visibility [%]")
+    ax1.set_ylabel("V - Visibilidade [%]")
 
     linhas = [linha_y1, linha_y2]
     labels = [l.get_label() for l in linhas]
@@ -153,21 +155,21 @@ def plot_dual_graph(
  
         # — Top subplot: R_sk (left axis) + QBER (right axis) —
         ax_top.plot(x, safe_log10(skr[0]), linewidth=2, linestyle=(0, (1, 1)),
-                    color='blue',  label="R_sk of the BB84")
+                    color='blue',  label="R_sk do BB84")
         ax_top.plot(x, safe_log10(skr[1]), linewidth=3, linestyle=(0, (1, 5)),
-                    color='green', label="R_sk of the B92")
+                    color='green', label="R_sk do B92")
         ax_top.plot(x, safe_log10(skr[2]), linewidth=5, linestyle=(0, (1, 10)),
-                    color='red',   label="R_sk of the COW")
-        ax_top.set_ylabel("log₁₀ Secret Key Rate (R_sk)\n[bits per sent qubit]" if show_left_ylabel else "", fontsize=fontsize)
+                    color='red',   label="R_sk do COW")
+        ax_top.set_ylabel("log₁₀ Taxa de chave secreta (R_sk)\n[bits por qubit enviado]" if show_left_ylabel else "", fontsize=fontsize)
         ax_top.grid(True)
  
         ax_qber = ax_top.twinx()
         ax_qber.plot(x, np.array(qber[0]) * 100, linewidth=3, linestyle=(0, (5, 1)),
-                     color='orange', label="QBER of the BB84")
+                     color='orange', label="QBER do BB84")
         ax_qber.plot(x, np.array(qber[1]) * 100, linewidth=3, linestyle="solid",
-                     color='maroon', label="QBER of the B92")
+                     color='maroon', label="QBER do B92")
         ax_qber.plot(x, np.array(qber[2]) * 100, linewidth=3, linestyle=(0, (5, 10)),
-                     color='violet',  label="QBER of the COW")
+                     color='violet',  label="QBER do COW")
         ax_qber.set_ylabel("QBER [%]" if show_right_ylabel else "", fontsize=fontsize)
  
         # — Bottom subplot: R_s —
@@ -180,7 +182,7 @@ def plot_dual_graph(
                           linestyle=(0, (3, 1, 1, 1, 1, 1)),
                           color='black', label="COW")
         ax_bot.set_xlabel(x_label, fontsize=fontsize)
-        ax_bot.set_ylabel("R_s - Useful bit rate [%]" if show_left_ylabel else "", fontsize=fontsize)
+        ax_bot.set_ylabel("R_s - Taxa de bits úteis [%]" if show_left_ylabel else "", fontsize=fontsize)
         ax_bot.grid(True)
  
         # Collect all line handles for the shared legend
@@ -213,6 +215,50 @@ def plot_dual_graph(
  
     plt.tight_layout(rect=[0, 0.08, 1, 0.96])
     #plt.tight_layout(rect=[0.04, 0.12, 0.96, 0.90])
+    ###########################################################################################
+    plt.subplots_adjust(wspace=0.55)   # <-- separação extra entre colunas
+
+    # ---- force the renderer to compute final axis positions ----
+    fig.canvas.draw()
+
+    # ---- draw thin bounding boxes + labels (a) and (b) ----
+    pad = 0.02   # padding em coordenadas de figura (0–1)
+
+    for col, label, label_ha in [(0, '(a)', 'left'), (1, '(b)', 'right')]:
+        pos_top = axes[0, col].get_position()
+        pos_bot = axes[1, col].get_position()
+
+        # Bounding box em coordenadas de figura
+        x0 = pos_top.x0 - pad
+        y0 = pos_bot.y0 - pad
+        width  = pos_top.x1 - pos_top.x0 + 2 * pad
+        height = pos_top.y1 - pos_bot.y0 + 2 * pad
+
+        rect = mpatches.FancyBboxPatch(
+            (x0, y0), width, height,
+            boxstyle="square,pad=0",
+            linewidth=0.8,
+            edgecolor='black',
+            facecolor='none',
+            transform=fig.transFigure,
+            clip_on=False,
+            zorder=10,
+        )
+        fig.add_artist(rect)
+
+        # Rótulo (a) no canto superior esquerdo / (b) no canto superior direito
+        label_x = x0 + 0.005 if label_ha == 'left' else x0 + width - 0.005
+        label_y = y0 + height - 0.005
+        fig.text(
+            label_x, label_y, label,
+            fontsize=fontsize,
+            fontweight='bold',
+            va='top',
+            ha=label_ha,
+            transform=fig.transFigure,
+            zorder=11,
+        )
+    ###########################################################################################
     plt.savefig(f"data/{filename}_graph-dual.png",
                 dpi=300, bbox_inches='tight')
     plt.close() 
@@ -231,7 +277,7 @@ def main():
            rs=[df_d["R_s-BB84"], df_d["R_s-B92"], df_d["R_s-COW"]], 
            rs_Eve=[df_d["R_s-BB84+Eve"], df_d["R_s-B92+Eve"], df_d["R_s-COW+Eve"]], 
            x_list=df_d["distance"], 
-           x_label="Distance (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Keysize={keysize} bits", filename="distance")
+           x_label="Distância (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Tamanho de chave={keysize} bits", filename="distance")
 
     plot_graph(skr=[df_k["R_sk-BB84"], df_k["R_sk-B92"], df_k["R_sk-COW"]], 
            skr_Eve=[df_k["R_sk-BB84+Eve"], df_k["R_sk-B92+Eve"], df_k["R_sk-COW+Eve"]], 
@@ -240,28 +286,28 @@ def main():
            rs=[df_k["R_s-BB84"], df_k["R_s-B92"], df_k["R_s-COW"]], 
            rs_Eve=[df_k["R_s-BB84+Eve"], df_k["R_s-B92+Eve"], df_k["R_s-COW+Eve"]], 
            x_list=df_k["keysize"], 
-           x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters", filename="keysize")
+           x_label="Tamanho de chave (k) [bits]", title=f"Aten.={channel_parameters[1]} dB/m, Distância={channel_parameters[0]} m", filename="keysize")
            
     plot_v(visibility=df_d["Visibility-COW"], 
            visibility_Eve=df_d["Visibility-COW+Eve"],
            x_list=df_d["distance"], 
-           x_label="Distance (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Keysize={keysize} bits", filename="distance")
+           x_label="Distância (d) [m]", title=f"Aten.={channel_parameters[1]} dB/m, Tamanho de chave={keysize} bits", filename="distance")
     
     plot_v(visibility=df_k["Visibility-COW"], 
            visibility_Eve=df_k["Visibility-COW+Eve"],
            x_list=df_k["keysize"], 
-           x_label="Key Size (k) [bit width]", title=f"Aten.={channel_parameters[1]} dB/m, Distance={channel_parameters[0]} meters", filename="keysize")
+           x_label="Tamanho de chave (k) [bits]", title=f"Aten.={channel_parameters[1]} dB/m, Distância={channel_parameters[0]} m", filename="keysize")
 
     plot_dual_graph(
     skr_left=[df_d["R_sk-BB84"], df_d["R_sk-B92"], df_d["R_sk-COW"]],   
     qber_left=[df_d["QBER-BB84"], df_d["QBER-B92"], df_d["QBER-COW"]],   
     rs_left=[df_d["R_s-BB84"], df_d["R_s-B92"], df_d["R_s-COW"]],   
-    x_list_left=df_d["distance"],   x_label_left="Distance (d) [m]",   subtitle_left=f"Distance variation - Keysize={keysize} bits",
+    x_list_left=df_d["distance"],   x_label_left="Distância (d) [m]",   subtitle_left=f"Variação da distância - Tamanho da Chave={keysize} bits",
 
     skr_right=[df_k["R_sk-BB84"], df_k["R_sk-B92"], df_k["R_sk-COW"]],  
     qber_right=[df_k["QBER-BB84"], df_k["QBER-B92"], df_k["QBER-COW"]],  
     rs_right=[df_k["R_s-BB84"], df_k["R_s-B92"], df_k["R_s-COW"]],  
-    x_list_right=df_k["keysize"],   x_label_right="Key Size (k) [bit width]",  subtitle_right=f"Key size variation - Distance={channel_parameters[0]} meters",
+    x_list_right=df_k["keysize"],   x_label_right="Tamanho da chave (k) [bits]",  subtitle_right=f"Variação do tamanho da chave - Distância={channel_parameters[0]} m",
     title=f"Aten.={channel_parameters[1]} dB/m",
     filename="ideal_scenario"
     )
@@ -270,12 +316,12 @@ def main():
     skr_left=[df_d["R_sk-BB84+Eve"], df_d["R_sk-B92+Eve"], df_d["R_sk-COW+Eve"]],   
     qber_left=[df_d["QBER-BB84+Eve"], df_d["QBER-B92+Eve"], df_d["QBER-COW+Eve"]],   
     rs_left=[df_d["R_s-BB84+Eve"], df_d["R_s-B92+Eve"], df_d["R_s-COW+Eve"]],   
-    x_list_left=df_d["distance"],   x_label_left="Distance (d) [m]",   subtitle_left=f"Distance variation - Keysize={keysize} bits",
+    x_list_left=df_d["distance"],   x_label_left="Distância (d) [m]",   subtitle_left=f"Variação da distância - Tamanho da Chave={keysize} bits",
 
     skr_right=[df_k["R_sk-BB84+Eve"], df_k["R_sk-B92+Eve"], df_k["R_sk-COW+Eve"]],  
     qber_right=[df_k["QBER-BB84+Eve"], df_k["QBER-B92+Eve"], df_k["QBER-COW+Eve"]],  
     rs_right=[df_k["R_s-BB84+Eve"], df_k["R_s-B92+Eve"], df_k["R_s-COW+Eve"]],  
-    x_list_right=df_k["keysize"],   x_label_right="Key Size (k) [bit width]",  subtitle_right=f"Key size variation - Distance={channel_parameters[0]} meters",
+    x_list_right=df_k["keysize"],   x_label_right="Tamanho da chave (k) [bits]",  subtitle_right=f"Variação do tamanho da chave - Distância={channel_parameters[0]} m",
     title=f"Aten.={channel_parameters[1]} dB/m",
     filename="eve_scenario"
     )
