@@ -214,51 +214,6 @@ def plot_dual_graph(
                fancybox=True, shadow=True, ncol=5, fontsize=fontsize_legend, markerscale=3)
  
     plt.tight_layout(rect=[0, 0.08, 1, 0.96])
-    #plt.tight_layout(rect=[0.04, 0.12, 0.96, 0.90])
-    ###########################################################################################
-    plt.subplots_adjust(wspace=0.55)   # <-- separação extra entre colunas
-
-    # ---- force the renderer to compute final axis positions ----
-    fig.canvas.draw()
-
-    # ---- draw thin bounding boxes + labels (a) and (b) ----
-    pad = 0.02   # padding em coordenadas de figura (0–1)
-
-    for col, label, label_ha in [(0, '(a)', 'left'), (1, '(b)', 'right')]:
-        pos_top = axes[0, col].get_position()
-        pos_bot = axes[1, col].get_position()
-
-        # Bounding box em coordenadas de figura
-        x0 = pos_top.x0 - pad
-        y0 = pos_bot.y0 - pad
-        width  = pos_top.x1 - pos_top.x0 + 2 * pad
-        height = pos_top.y1 - pos_bot.y0 + 2 * pad
-
-        rect = mpatches.FancyBboxPatch(
-            (x0, y0), width, height,
-            boxstyle="square,pad=0",
-            linewidth=0.8,
-            edgecolor='black',
-            facecolor='none',
-            transform=fig.transFigure,
-            clip_on=False,
-            zorder=10,
-        )
-        fig.add_artist(rect)
-
-        # Rótulo (a) no canto superior esquerdo / (b) no canto superior direito
-        label_x = x0 + 0.005 if label_ha == 'left' else x0 + width - 0.005
-        label_y = y0 + height - 0.005
-        fig.text(
-            label_x, label_y, label,
-            fontsize=fontsize,
-            fontweight='bold',
-            va='top',
-            ha=label_ha,
-            transform=fig.transFigure,
-            zorder=11,
-        )
-    ###########################################################################################
     plt.savefig(f"data/{filename}_graph-dual.png",
                 dpi=300, bbox_inches='tight')
     plt.close() 
