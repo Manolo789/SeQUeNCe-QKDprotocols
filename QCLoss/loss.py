@@ -59,17 +59,27 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     '''
     The implementation of the attenuation system in the channel was 
     carried out following the model proposed in the following references:
-        -DEBARPITA PAUL CHOUDHURY; NANDI, D. Prediction of transmittance for a free space 
+        [1] DEBARPITA PAUL CHOUDHURY; NANDI, D. Prediction of transmittance for a free space 
         quantum channel and improving quantum Keyrate in adverse atmospheric condition. Optical 
         and quantum electronics, v. 56, n. 6, 3 maio 2024.
             
-        -MASOUD GHALAII; STEFANO PIRANDOLA. Quantum communications in a moderate-to-
+        [2] MASOUD GHALAII; STEFANO PIRANDOLA. Quantum communications in a moderate-to-
         strong turbulent space. Communications Physics, v. 5, n. 1, 10 fev. 2022. 
             
-        -FADHIL, H. A. et al. Optimization of free space optics parameters: An optimum solution for bad 
+        [3] FADHIL, H. A. et al. Optimization of free space optics parameters: An optimum solution for bad 
         weather conditions. v. 124, n. 19, p. 3969–3973, 1 out. 2013. 
             
-        -Ali, M.A.A.: FSO communication characteristics under fog weather condition. Int. J. Sci. Eng. Res. 6(1), 1350–1358 (2015)
+        [4] Ali, M.A.A.: FSO communication characteristics under fog weather condition. Int. J. Sci. Eng. Res. 6(1), 1350–1358 (2015)
+
+        [5] MURTY, S. S. R. Laser beam propagation in atmospheric turbulence. Proceedings of the Indian Academy of 
+        Sciences Section C: Engineering Sciences, v. 2, n. 2, p. 179–195, maio 1979.
+
+        [6] PRAHL, S. miepython: Pure python calculation of Mie scattering. Zenodo, 2026. 
+        Available at: https://doi.org/10.5281/zenodo.18893972
+
+        [7] ANDREWS, L. C.; PHILLIPS, R. L. Laser Beam Propagation Through Random Media.
+        SPIE-International Society for Optical Engineering, 2005. p. 57–82
+
     Attributes:
         distance: Distância [m]
         v_range: Faixa de visibilidade (Visibilidade Horizontal) [Km]
@@ -100,23 +110,21 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     # S = 110.4 K
     if viscosity == None:
         viscosity = 1.716*1e-4*((273.15+110.4)/(temperature+110.4))*(temperature/273.15)**(3/2)
-        
-    # C_Tatarskii: A constante de Tatarskii relaciona l0_parameter à microescala de Kolmogorov (ref: Andrews & Phillips, Cap. 3).
+
+    # l0_parameter = C_Tatarskii*(ν³/ε)**(1/4)    (referência 7)
+    # C_Tatarskii: A constante de Tatarskii relaciona l0_parameter à microescala de Kolmogorov
+    # ν: viscosidade cinemática (ν = viscosidade_dinâmica/densidade_do_ar)
+    # ε: taxa de dissipação de energia turbulenta. A partir da velocidade do vento e da altura, 
+    #    usando a teoria da camada limite atmosférica: ε ≈ velocidade_de_atrito³/(κ*h),
+    #    onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
     C_Tatarskii = 7.4
     M_air = 28.9645 # g/mol
     R_ideal = 0.0820574587 # L * atm * K^-1 * mol^-1
     air_density = (M_air*(pressure/1013.25))/(1000*R_ideal*temperature)
-    
-    # l0_parameter = C_Tatarskii*(ν³/ε)**(1/4)
-    # ν: viscosidade cinemática (ν = viscosidade_dinâmica/densidade_do_ar)
-    # ε: taxa de dissipação de energia turbulenta. A partir da velocidade do vento e da altura, 
-    # usando a teoria da camada limite atmosférica: ε ≈ velocidade_de_atrito³/(κ*h),
-    # onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
     l0_parameter = 0.01*C_Tatarskii*(((viscosity/air_density)**3)/((friction_velocity**3)/(0.4*height)))**(1/4) 
 
-    # Fog Attenuation
-    
-    # Using Kim's model for the dispersion parameter
+    # Fog Attenuation (referência 1)
+    # Using Kim's model for the dispersion parameter (referência 4)
     if v_range > 50:
         delta = 1.6
     elif 50 > v_range > 6:
@@ -129,24 +137,24 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         delta = 0
     else:
         delta = None # v_range is outside the allowed range or has inconsistent values.
-
     beta_fog = (3.91/v_range)*((wavelength/550)**(-delta))
     eta_fog = math.exp(-distance*(beta_fog)*1e-3)
     
-    # Atmospheric turbulence
-    C_n2 = (((77.6*1e-6*pressure)/(temperature**2))**2)*((1+((0.00753)/((wavelength/1000)**2)))**2)*C_T**2 # Parâmetro do índice de refração
+    # Atmospheric turbulence (referência 1 e 2)
+    C_n2 = (((77.6*1e-6*pressure)/(temperature**2))**2)*((1+((0.00753)/((wavelength/1000)**2)))**2)*C_T**2 # Parâmetro do índice de refração (referência 5)
     k_wave = 2*math.pi/wavelength_m # Número de onda
     Z_R = (math.pi*(w_0*0.01)**2)/wavelength_m # Comprimento do feixe de Rayleigh
     A_rytov = 1.23*(k_wave**(7/6))*C_n2*(distance**(11/6)) # Parâmetro de Rytov
     w_z2 = ((w_0*0.01)**2)*((1-(distance/(R_0*0.01)))**2 + (distance/Z_R)**2)
     zi_parameter = 1/(C_n2*(k_wave**2)*(l0_parameter**(5/3)))
+    # Effective beam waist for
     if distance >= zi_parameter:
-        w_lt2 = w_z2*(1+0.74*(4/3)*A_rytov*(((35.05*distance)/(k_wave*l0_parameter**2))**(1/6))*((2*distance)/(k_wave*w_z2))) # Effective beam waist for 
+        w_lt2 = w_z2*(1+0.74*(4/3)*A_rytov*(((35.05*distance)/(k_wave*l0_parameter**2))**(1/6))*((2*distance)/(k_wave*w_z2)))
     elif distance < zi_parameter:
-        w_lt2 = w_z2*(1+1.63*(A_rytov**(6/5))*((2*distance)/(k_wave*w_z2))) # Effective beam waist
+        w_lt2 = w_z2*(1+1.63*(A_rytov**(6/5))*((2*distance)/(k_wave*w_z2)))
     eta_turb = 1 - math.exp(-(2*(receiver_radius*0.01)**2)/(w_lt2))
 
-    # Rain attenuation    
+    # Rain attenuation (referência 1, 3 e 6)
     if Q_scat == None:
         m_water = n_value(wavelength, temperature) + 0j
         Q_scat, _, _, _ = miepython.efficiencies_mx(m_water, (2*math.pi*size_raindrop/wavelength*1e-7))
