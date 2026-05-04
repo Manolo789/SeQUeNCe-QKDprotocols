@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from matplotlib import pyplot as plt
 
 from sequence.components.optical_channel import QuantumChannel, ClassicalChannel, EveQuantumChannel
-from sequence.components.thermal_noise_source import ThermalNoiseSource, compute_n_B
+from sequence.components.thermal_noise_source import ThermalNoiseSource, compute_n_B, _c
 from sequence.kernel.event import Event
 from sequence.kernel.process import Process
 from sequence.kernel.timeline import Timeline
@@ -852,10 +852,11 @@ def sim_variable_keysize(runtime, keysize_list, channel_parameters,
 
 def run_simulation():
     start = time.time()
-
-    ls_params = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 1}
-    ls_params_cow = {"frequency": 8e6, "wavelength":780, "mean_photon_num": 0.5}
+    wavelength = 780
+    bandwidth = ...
     count_rate = 20e6
+    ls_params = {"frequency": 8e6, "wavelength":wavelength, "mean_photon_num": 1}
+    ls_params_cow = {"frequency": 8e6, "wavelength":wavelength, "mean_photon_num": 0.5}
     detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate},
                        {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate}]
     detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate},
@@ -872,7 +873,7 @@ def run_simulation():
     #     R_0: para feixes colimados, adota-se R_0 = math.inf
     #     transmitter_height:
     # From receiver:
-    #     receiver_radius:
+    #     receiver_radius: https://www.sharpstar-optics.com/Products_1/79.html
     #     receiver_height:
     # From channel:
     #     v_range:
@@ -888,10 +889,13 @@ def run_simulation():
     #     friction_velocity: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
     #     height = (transmitter_height+receiver_height)/2
     loss_parameters = {"v_range":,
-                       "receiver_radius":, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf, "friction_velocity":, "height":,
+                       "receiver_radius":10.3, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf, "friction_velocity":, "height":,
                        "size_raindrop":, "viscosity":None, "precipitation_rate":, "Q_scat":2}
+    diameter_Sensor = 1e-4 # meters (source: https://media.thorlabs.com/globalassets/items/s/sp/spd/spdmh2/mtn028160-d02.pdf?v=0116030233)
+    focal_distance = 0.7004 # meters (source: https://www.sharpstar-optics.com/Products_1/79.html)
+    Omega_fov = 2*math.pi*(1-math.cos(2*atan(diameter_Sensor/(2*focal_distance))))
     # thermal_params = {"delta_lambda_nm": ..., "delta_t_ns": 1e9/(count_rate of detector_params), "omega_fov_sr": ..., "a_R_cm": loss_parameters["receiver_radius"], "B_sky": ...}
-    thermal_params = {"delta_lambda_nm": , "delta_t_ns": (1e9/count_rate), "omega_fov_sr": , "a_R_cm": loss_parameters["receiver_radius"], "B_sky": }
+    thermal_params = {"delta_lambda_nm": ((1e9*bandwidth*(wavelength*1e-9)**2)/_c), "delta_t_ns": (1e9/count_rate), "omega_fov_sr": Omega_fov, "a_R_cm": loss_parameters["receiver_radius"], "B_sky": }
     sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num, loss_parameters=loss_parameters, thermal_params=thermal_params)
     sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num, loss_parameters=loss_parameters, thermal_params=thermal_params)
 
