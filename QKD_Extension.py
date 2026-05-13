@@ -1,10 +1,7 @@
 import math
 import time
-
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from matplotlib import pyplot as plt
-
 from sequence.components.optical_channel import QuantumChannel, ClassicalChannel, EveQuantumChannel
 from sequence.components.thermal_noise_source import ThermalNoiseSource, compute_n_B, _c
 from sequence.kernel.event import Event
@@ -15,76 +12,121 @@ from sequence.qkd.B92 import pair_b92_protocols
 from sequence.qkd.COW import pair_cow_protocols
 from sequence.topology.node import QKDNode, EveNode
 from sequence.utils.encoding_cow import time_bin_cow
-from QCLoss.loss import channel_FSO_loss
+from QCLoss.loss import channel_FSO_loss, cn2
 import sequence.utils.log as log
 import numpy as np
 import pandas as pd
+import warnings
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Protocol registry — every per-protocol difference lives here
+# ═══════════════════════════════════════════════════════════════════════
+PROTOCOL_REGISTRY = {
+    "BB84": dict(
+        qkdtype=0, pair_fn=pair_bb84_protocols, encoding=None,
+        log_module="BB84", has_eve=False, needs_visibility=False,
+        ls_key="ls_params", det_key="detector_params", source_type="sps",
+    ),
+    "B92": dict(
+        qkdtype=1, pair_fn=pair_b92_protocols, encoding=None,
+        log_module="B92", has_eve=False, needs_visibility=False,
+        ls_key="ls_params", det_key="detector_params", source_type="sps",
+    ),
+    "COW": dict(
+        qkdtype=2, pair_fn=pair_cow_protocols, encoding=time_bin_cow,
+        log_module="COW", has_eve=False, needs_visibility=True,
+        ls_key="ls_params_cow", det_key="detector_params_cow", source_type="wcp",
+    ),
+    "BB84+Eve": dict(
+        qkdtype=0, pair_fn=pair_bb84_protocols, encoding=None,
+        log_module="BB84", has_eve=True, needs_visibility=False,
+        ls_key="ls_params", det_key="detector_params", source_type="sps",
+    ),
+    "B92+Eve": dict(
+        qkdtype=1, pair_fn=pair_b92_protocols, encoding=None,
+        log_module="B92", has_eve=True, needs_visibility=False,
+        ls_key="ls_params", det_key="detector_params", source_type="sps",
+    ),
+    "COW+Eve": dict(
+        qkdtype=2, pair_fn=pair_cow_protocols, encoding=time_bin_cow,
+        log_module="COW", has_eve=True, needs_visibility=True,
+        ls_key="ls_params_cow", det_key="detector_params_cow", source_type="wcp",
+    ),
+}
+ 
+# Metric column names used in the output CSVs (label, dict-key)
+_METRIC_COLS = [
+    ("R_sk", "skr"), ("QBER", "qber"), ("Throughputs", "throughputs"),
+    ("Latency", "latency"), ("Loss", "loss"), ("R_s", "rs"),
+]
+_VIS_COL = ("Visibility", "visibility")
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Metric helpers
+# ═══════════════════════════════════════════════════════════════════════
 def binary_entropy(Q):
     Q = max(0.0, min(1.0, Q))
     if Q == 0 or Q == 1:
         return 0
     return -Q * math.log2(Q) - (1 - Q) * math.log2(1 - Q)
-    
-def _collect_metrics(protocol, distance: float, attenuation: float):
-    """Extrai QBER, throughput, latência, SKR e perda de um protocolo."""
-    secret_key_rate_mean = 0
-
-    QBER = protocol.error_rates
-    THROUGHPUTS = np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0
-    LATENCY = protocol.latency
-    LOSS = 1-10**((distance*attenuation)/(-10))
-    R_s_list = []
-    
-    if not QBER or protocol.send_bits_length == 0:
-        return QBER, THROUGHPUTS, LATENCY, 0.0, LOSS, 0.0
-    
-    for i, e in enumerate(QBER):
-        R_s = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        secret_key_rate_mean += max(0.0, R_s * (1 - 2*binary_entropy(e)))
-        R_s_list.append(R_s)
-    SECRET_KEY_RATE = secret_key_rate_mean/len(QBER)
-    mean_R_s = np.mean(np.array(R_s_list, dtype=float))
-    
-    return QBER, THROUGHPUTS, LATENCY, SECRET_KEY_RATE, LOSS, mean_R_s
-    
-def _collect_cow_metrics(protocol, visibility, ls_params, distance: float, attenuation: float):
-    """Extrai métricas COW com SKR ajustado por visibilidade do monitoramento."""
-    secret_key_rate_mean = 0
-
+ 
+ 
+def _safe_mean(lst, default=np.nan):
+    """np.nanmean(lst) but tolerant of None / empty / scalar inputs."""
+    if lst is None:
+        return default
+    try:
+        if len(lst) == 0:
+            return default
+    except TypeError:                       # already a scalar
+        return float(lst)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = float(np.nanmean(lst))
+    return result if not np.isnan(result) else default
+ 
+ 
+def _collect_metrics(protocol):
+    """Generic metrics: QBER, throughput, latency, SKR, loss, R_s."""
     qber_list = protocol.error_rates
     throughputs = np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0
     latency = protocol.latency
-    
-    t = 10 ** ((distance * attenuation) / (-10))
-    loss = 1 - t
-    
+ 
     if not qber_list or protocol.send_bits_length == 0:
-        return qber_list, throughputs, latency, 0.0, loss, 0.0
-    
-    # R_sk calculated based on https://doi.org/10.1063/1.2126792
-    
-    
-    mean_photon_num = ls_params["mean_photon_num"]
-    r = mean_photon_num*(1-t)
-    R_s_list = []
-
+        return qber_list, throughputs, latency, 0.0, 0.0
+ 
+    rs_list, skr_sum = [], 0.0
     for i, e in enumerate(qber_list):
-        R_s = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        
+        rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
+        skr_sum += max(0.0, rs * (1 - 2 * binary_entropy(e)))
+        rs_list.append(rs)
+    return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
+ 
+ 
+def _collect_cow_metrics(protocol, visibility, ls_params, loss):
+    """COW metrics with visibility-adjusted SKR (DOI 10.1063/1.2126792)."""
+    qber_list = protocol.error_rates
+    throughputs = np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0
+    latency = protocol.latency
+ 
+    if not qber_list or protocol.send_bits_length == 0:
+        return qber_list, throughputs, latency, 0.0, 0.0
+ 
+    mu = ls_params["mean_photon_num"]
+    t = 1 - loss
+    r = mu * (1 - t)
+    rs_list, skr_sum = [], 0.0
+    for i, e in enumerate(qber_list):
+        rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
         v = visibility[i]
-
-        eve_info = r + ((1 - v)*(1 + math.exp(-mean_photon_num*t))/(2*math.exp(-mean_photon_num*t)))
-        secret_key_rate_mean += max(0.0, R_s * (1 - binary_entropy(e) - eve_info)) 
-        R_s_list.append(R_s)
-        
-    secret_key_rate = secret_key_rate_mean / len(qber_list)
-    mean_R_s = np.mean(np.array(R_s_list, dtype=float))
-    
-    return qber_list, throughputs, latency, secret_key_rate, loss, mean_R_s
-
-def _attach_thermal_noise(tl, detector, ls_params: dict, thermal_params: dict) -> ThermalNoiseSource:
-    """Cria e conecta ThermalNoiseSource ao detector de Bob.
+        eve_info = r + ((1 - v) * (1 + math.exp(-mu * t)) / (2 * math.exp(-mu * t)))
+        skr_sum += max(0.0, rs * (1 - binary_entropy(e) - eve_info))
+        rs_list.append(rs)
+    return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
+ 
+ 
+def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
+    """Create and connect a ThermalNoiseSource to `detector`.
     Args:
         tl            : timeline da simulação
         detector      : objeto Detector alvo (Bob)
@@ -92,817 +134,433 @@ def _attach_thermal_noise(tl, detector, ls_params: dict, thermal_params: dict) -
         thermal_params: {"delta_lambda_nm": ..., "delta_t_ns": ..., "omega_fov_sr": ..., "a_R_cm": ..., "B_sky": ...}
 
     Returns:
-        ThermalNoiseSource já conectada ao detector
-    """
+        ThermalNoiseSource já conectada ao detector"""
     n_B = compute_n_B(
-        wavelength_nm   = ls_params["wavelength"],
-        delta_lambda_nm = thermal_params["delta_lambda_nm"],
-        delta_t_ns      = thermal_params["delta_t_ns"],
-        omega_fov_sr    = thermal_params["omega_fov_sr"],
-        a_R_cm          = thermal_params["a_R_cm"],
-        B_sky           = thermal_params["B_sky"],
+        wavelength_nm=ls_params["wavelength"],
+        delta_lambda_nm=thermal_params["delta_lambda_nm"],
+        delta_t_ns=thermal_params["delta_t_ns"],
+        omega_fov_sr=thermal_params["omega_fov_sr"],
+        a_R_cm=thermal_params["a_R_cm"],
+        B_sky=thermal_params["B_sky"],
     )
-
-    thermal_src = ThermalNoiseSource(
-        name          = f"thermal_{detector.name}",
-        timeline      = tl,
-        n_B           = n_B,
-        frequency     = ls_params["frequency"],
-        encoding_type = detector.owner.encoding if hasattr(detector.owner, "encoding")
-                        else polarization,
+    encoding = (detector.owner.encoding if hasattr(detector.owner, "encoding") else None)
+    src = ThermalNoiseSource(
+        name=f"thermal_{detector.name}", timeline=tl, n_B=n_B,
+        frequency=ls_params["frequency"], encoding_type=encoding,
     )
-    thermal_src.add_receiver(detector)
-    tl.entities[thermal_src.name] = thermal_src
-
-    return thermal_src
-
-def simulation_BB84(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp", loss=None, thermal_params=None):
-    tl = Timeline(runtime*1e9)
-    tl.show_progress = False
-
-    # set log
-    if (log_filename != -1):
-        log.set_logger(__name__, tl, log_filename)
-        log.set_logger_level('DEBUG')
-        log.track_module('BB84')
-        #log.track_module('timeline')
-        log.track_module('light_source')
-
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
-    cc0 = ClassicalChannel("cc0", tl, distance=distance)
-    cc1 = ClassicalChannel("cc1", tl, distance=distance)
-    cc0.delay += 1e9  # 1 ms
-    cc1.delay += 1e9
-
-    # Alice
-    alice = QKDNode("alice", tl, stack_size=1, source_type=source_type)
-    alice.set_seed(0)
-
-    for name, param in ls_params.items():
-        alice.update_lightsource_params(name, param)
-
-    # Bob
-    bob = QKDNode("bob", tl, stack_size=1, source_type=source_type)
-    bob.set_seed(1)
-
-    for i in range(len(detector_params)):
-        for name, param in detector_params[i].items():
-            bob.update_detector_params(i, name, param)
-
-    qc0.set_ends(alice, bob.name)
-    qc1.set_ends(bob, alice.name)
-    cc0.set_ends(alice, bob.name)
-    cc1.set_ends(bob, alice.name)
-
-    # BB84 config
-    pair_bb84_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
-    process = Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])
-    event = Event(0, process)
-    tl.schedule(event)
-
-    tl.init()
-    if thermal_params is not None:
-        bob_detector = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_detector, ls_params, thermal_params)
-    tl.run()
-
-    return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
-
-def simulation_B92(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, source_type="wcp", loss=None, thermal_params=None):
-    tl = Timeline(runtime*1e9)
-    tl.show_progress = False
-
-    # set log
-    if (log_filename != -1):
-        log.set_logger(__name__, tl, log_filename)
-        log.set_logger_level('DEBUG')
-        log.track_module('B92')
-        #log.track_module('timeline')
-        log.track_module('light_source')
-
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
-    cc0 = ClassicalChannel("cc0", tl, distance=distance)
-    cc1 = ClassicalChannel("cc1", tl, distance=distance)
-    cc0.delay += 1e9  # 1 ms
-    cc1.delay += 1e9
-
-    # Alice
-    alice = QKDNode("alice", tl, stack_size=1, qkdtype=1, source_type=source_type)
-    alice.set_seed(0)
-
-    for name, param in ls_params.items():
-        alice.update_lightsource_params(name, param)
-
-    # Bob
-    bob = QKDNode("bob", tl, stack_size=1, qkdtype=1, source_type=source_type)
-    bob.set_seed(1)
-
-    for i in range(len(detector_params)):
-        for name, param in detector_params[i].items():
-            bob.update_detector_params(i, name, param)
-
-    qc0.set_ends(alice, bob.name)
-    qc1.set_ends(bob, alice.name)
-    cc0.set_ends(alice, bob.name)
-    cc1.set_ends(bob, alice.name)
-
-    # B92 config
-    pair_b92_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
-    process = Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])
-    event = Event(0, process)
-    tl.schedule(event)
-
-    tl.init()
-    if thermal_params is not None:
-        bob_detector = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_detector, ls_params, thermal_params)
-    tl.run()
-
-    return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
+    src.add_receiver(detector)
+    tl.entities[src.name] = src
+    return src
 
 
-def simulation_COW(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20, loss=None, thermal_params=None):
-    tl = Timeline(runtime*1e9)
-    tl.show_progress = False
 
-    # set log
-    if (log_filename != -1):
-        log.set_logger(__name__, tl, log_filename)
-        log.set_logger_level('DEBUG')
-        log.track_module('COW')
-        #log.track_module('timeline')
-        log.track_module('light_source')
-
-    qc0 = QuantumChannel("qc0", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
-    cc0 = ClassicalChannel("cc0", tl, distance=distance)
-    cc1 = ClassicalChannel("cc1", tl, distance=distance)
-    cc0.delay += 1e9  # 1 ms
-    cc1.delay += 1e9
-
-    # Alice
-    alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
-    alice.set_seed(0)
-
-    for name, param in ls_params.items():
-        alice.update_lightsource_params(name, param)
-
-    # Bob
-    bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
-    bob.set_seed(1)
-
-    for i in range(len(detector_params)):
-        for name, param in detector_params[i].items():
-            bob.update_detector_params(i, name, param)
-            
-    # ── Set interferometer phase error (Source B) ──
-    # Access QSDetectorCOW and set its interferometer phase_error
-    from sequence.components.qsdetector_cow import QSDetectorCOW
-    for comp in bob.components.values():
-        if isinstance(comp, QSDetectorCOW):
-            comp.interferometer.phase_error = interferometer_phase_error
-            break
-
-    qc0.set_ends(alice, bob.name)
-    qc1.set_ends(bob, alice.name)
-    cc0.set_ends(alice, bob.name)
-    cc1.set_ends(bob, alice.name)
-
-    # COW config
-    pair_cow_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
-    process = Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])
-    event = Event(0, process)
-    tl.schedule(event)
-
-    tl.init()
-    if thermal_params is not None:
-        bob_detector = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_detector, ls_params, thermal_params)
-    tl.run()
-
-    VISIBILITY = alice.protocol_stack[0].visibility
-    QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s = _collect_cow_metrics(alice.protocol_stack[0], VISIBILITY, ls_params, distance, attenuation)
-    
-    return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s, VISIBILITY
-    
-    
-def simulation_BB84_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 0.9, eve_position = 0.5, source_type="wcp", loss=None, thermal_params=None):
+# ═══════════════════════════════════════════════════════════════════════
+#  Unified simulation runner
+# ═══════════════════════════════════════════════════════════════════════
+def run_qkd_simulation(
+    protocol, ls_params, detector_params, *,
+    runtime=20, log_filename=-1, distance=1e3,
+    polarization_fidelity=0.97, attenuation=2e-4,
+    keysize=256, key_num=math.inf,
+    source_type=None, loss=None, thermal_params=None,
+    phase_noise_coefficient=0.01, interferometer_phase_error=0.20,
+    eve_intercept_rate=0.9, eve_position=0.5,
+):
+    """Run any QKD protocol registered in PROTOCOL_REGISTRY.
+ 
+    Returns a dict with keys: qber, throughputs, latency, skr, loss, rs,
+    plus 'visibility' for COW protocols.
+    """
+    cfg = PROTOCOL_REGISTRY[protocol] # Configuration parameters
+    is_cow = cfg["qkdtype"] == 2 # If the protocol being executed is COW, then is_cow = True.
+    src_type = source_type if source_type is not None else cfg["source_type"]
+ 
     tl = Timeline(runtime * 1e9)
     tl.show_progress = False
+ 
     if log_filename != -1:
         log.set_logger(__name__, tl, log_filename)
-        log.set_logger_level('DEBUG')
-        log.track_module('BB84')
-        log.track_module('light_source')
-
-    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, loss=loss)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
-    
-    cc0 = ClassicalChannel("cc0", tl, distance=distance)
-    cc1 = ClassicalChannel("cc1", tl, distance=distance)
-    cc0.delay += 1e9   # 1 ms
-    cc1.delay += 1e9
-    
-    alice = QKDNode("alice", tl, stack_size=1, source_type=source_type)
-    alice.set_seed(0)
-    for name, param in ls_params.items():
-        alice.update_lightsource_params(name, param)
-
-    bob = QKDNode("bob", tl, stack_size=1, source_type=source_type)
-    bob.set_seed(1)
-    for i, dp in enumerate(detector_params):
-        for name, param in dp.items():
-            bob.update_detector_params(i, name, param)
-
-    qc0.set_ends(alice, bob.name)
-    qc1.set_ends(bob, alice.name)
-    cc0.set_ends(alice, bob.name)
-    cc1.set_ends(bob, alice.name)
-
-    
-    pair_bb84_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
-    tl.schedule(Event(0, Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])))
-    tl.init()
-    if thermal_params is not None:
-        bob_detector = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_detector, ls_params, thermal_params)
-    tl.run()
-    return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
-    
-
-def simulation_B92_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, eve_intercept_rate = 0.9, eve_position = 0.5, source_type="wcp", loss=None, thermal_params=None):
-    tl = Timeline(runtime * 1e9)
-    tl.show_progress = False
-    if log_filename != -1:
-        log.set_logger(__name__, tl, log_filename)
-        log.set_logger_level('DEBUG')
-        log.track_module('B92')
-        log.track_module('light_source')
-
-    eve = EveNode("eve", tl, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, loss=loss)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, loss=loss)
-    
+        log.set_logger_level("DEBUG")
+        log.track_module(cfg["log_module"])
+        log.track_module("light_source")
+ 
+    # -- Quantum channels (qc0 carries Eve if applicable)
+    qc_kwargs = dict(distance=distance,
+                     polarization_fidelity=polarization_fidelity,
+                     attenuation=attenuation, loss=loss)
+    if is_cow:
+        qc_kwargs["phase_noise_coefficient"] = phase_noise_coefficient
+ 
+    if cfg["has_eve"]:
+        eve_kwargs = dict(intercept_rate=eve_intercept_rate, seed=2)
+        if cfg["encoding"] is not None:
+            eve_kwargs["encoding"] = cfg["encoding"]
+        eve = EveNode("eve", tl, **eve_kwargs)
+        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, eve_position=eve_position, **qc_kwargs)
+    else:
+        qc0 = QuantumChannel("qc0", tl, **qc_kwargs)
+    qc1 = QuantumChannel("qc1", tl, **qc_kwargs)
+ 
+    # -- Classical channels
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
     cc0.delay += 1e9
     cc1.delay += 1e9
-
-    alice = QKDNode("alice", tl, stack_size=1, qkdtype=1, source_type=source_type)
+ 
+    # -- Nodes 
+    node_kwargs = dict(stack_size=1, qkdtype=cfg["qkdtype"], source_type=src_type)
+    if cfg["encoding"] is not None:
+        node_kwargs["encoding"] = cfg["encoding"]
+ 
+    alice = QKDNode("alice", tl, **node_kwargs)
     alice.set_seed(0)
-    for name, param in ls_params.items():
-        alice.update_lightsource_params(name, param)
-
-    bob = QKDNode("bob", tl, stack_size=1, qkdtype=1, source_type=source_type)
+    for k, v in ls_params.items():
+        alice.update_lightsource_params(k, v)
+ 
+    bob = QKDNode("bob", tl, **node_kwargs)
     bob.set_seed(1)
     for i, dp in enumerate(detector_params):
-        for name, param in dp.items():
-            bob.update_detector_params(i, name, param)
-
+        for k, v in dp.items():
+            bob.update_detector_params(i, k, v)
+ 
+    if is_cow:
+        from sequence.components.qsdetector_cow import QSDetectorCOW
+        for comp in bob.components.values():
+            if isinstance(comp, QSDetectorCOW):
+                comp.interferometer.phase_error = interferometer_phase_error
+                break
+ 
     qc0.set_ends(alice, bob.name)
     qc1.set_ends(bob, alice.name)
     cc0.set_ends(alice, bob.name)
     cc1.set_ends(bob, alice.name)
  
-
-    pair_b92_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
+    cfg["pair_fn"](alice.protocol_stack[0], bob.protocol_stack[0])
     tl.schedule(Event(0, Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])))
+ 
     tl.init()
     if thermal_params is not None:
-        bob_detector = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_detector, ls_params, thermal_params)
+        bob_det = bob.components[bob.first_component_name].detectors[0]
+        _attach_thermal_noise(tl, bob_det, ls_params, thermal_params)
     tl.run()
-    return _collect_metrics(alice.protocol_stack[0], distance, attenuation)
-
-def simulation_COW_Eve(ls_params, detector_params, runtime=20, log_filename=-1, distance=1e3, polarization_fidelity=0.97, attenuation=0.0002, keysize=256, key_num=math.inf, phase_noise_coefficient=0.01, interferometer_phase_error=0.20, eve_intercept_rate = 0.9, eve_position = 0.5, loss=None, thermal_params=None):
-    tl = Timeline(runtime * 1e9)
-    tl.show_progress = False
-    if log_filename != -1:
-        log.set_logger(__name__, tl, log_filename)
-        log.set_logger_level('DEBUG')
-        log.track_module('COW')
-        log.track_module('light_source')
-
-    eve = EveNode("eve", tl, encoding=time_bin_cow, intercept_rate=eve_intercept_rate, seed=2)
-    qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, eve_position=eve_position, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
-    qc1 = QuantumChannel("qc1", tl, distance=distance, polarization_fidelity=polarization_fidelity, attenuation=attenuation, phase_noise_coefficient=phase_noise_coefficient, loss=loss)
-    
-    cc0 = ClassicalChannel("cc0", tl, distance=distance)
-    cc1 = ClassicalChannel("cc1", tl, distance=distance)
-    cc0.delay += 1e9
-    cc1.delay += 1e9
-
-    alice = QKDNode("alice", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
-    alice.set_seed(0)
-    for name, param in ls_params.items():
-        alice.update_lightsource_params(name, param)
-
-    bob = QKDNode("bob", tl, encoding=time_bin_cow, stack_size=1, qkdtype=2, source_type="wcp")
-    bob.set_seed(1)
-    for i, dp in enumerate(detector_params):
-        for name, param in dp.items():
-            bob.update_detector_params(i, name, param)
-            
-    # ── Set interferometer phase error (Source B) ──
-    # Access QSDetectorCOW and set its interferometer phase_error
-    from sequence.components.qsdetector_cow import QSDetectorCOW
-    for comp in bob.components.values():
-        if isinstance(comp, QSDetectorCOW):
-            comp.interferometer.phase_error = interferometer_phase_error
-            break
-
-    qc0.set_ends(alice, bob.name)
-    qc1.set_ends(bob, alice.name)
-    cc0.set_ends(alice, bob.name)
-    cc1.set_ends(bob, alice.name)
-
-    pair_cow_protocols(alice.protocol_stack[0], bob.protocol_stack[0])
-    tl.schedule(Event(0, Process(alice.protocol_stack[0], "push", [keysize, key_num, 6e12])))
-    tl.init()
-    if thermal_params is not None:
-        bob_detector = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_detector, ls_params, thermal_params)
-    tl.run()
-    
-    VISIBILITY = alice.protocol_stack[0].visibility
-    QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s = _collect_cow_metrics(alice.protocol_stack[0], VISIBILITY, ls_params, distance, attenuation)
-    
-    return QBER, THROUGHPUTS, LATENCY, SKR, LOSS, R_s, VISIBILITY
-    
-    
+ 
+    proto_obj = alice.protocol_stack[0]
+    if loss is None:
+        loss = 1-10**((distance*attenuation)/(-10))
+    if cfg["needs_visibility"]:
+        vis = proto_obj.visibility
+        qber, th, lat, skr, rs = _collect_cow_metrics(proto_obj, vis, ls_params, loss)
+        return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs, visibility=vis)
+    qber, th, lat, skr, rs = _collect_metrics(proto_obj)
+    return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs)
+ 
+ 
 # ═══════════════════════════════════════════════════════════════════════
-#  Worker functions for parallel execution
-#  (top-level functions required by ProcessPoolExecutor / pickle)
+#  Backwards-compatible thin wrappers (preserve original tuple API)
 # ═══════════════════════════════════════════════════════════════════════
-def _safe_mean(lst, default=np.nan):
-    """Return np.nanmean(lst) if lst is non-empty, otherwise default.
-    
-    Handles None, empty lists, empty numpy arrays, and scalar values
-    without triggering RuntimeWarning from numpy.
-    """
-    if lst is None:
-        return default
-    try:
-        if len(lst) == 0:
-            return default
-    except TypeError:
-        # scalar value (e.g. already a float)
-        return float(lst)
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        result = float(np.nanmean(lst))
-    return result if not np.isnan(result) else default
-
-def _worker_distance(task: dict):
-    """Execute one (protocol, distance) simulation and return a results dict.
-
-    Each worker runs in its own process, so Timeline objects and all
-    SeQUeNCe state are completely isolated — no shared-memory conflicts.
-
-    Args:
-        task (dict): contains 'protocol', 'distance', and all kwargs
-                     needed by the corresponding simulation function.
-
-    Returns:
-        dict with keys: protocol, distance, and the simulation outputs.
-    """
-    proto    = task["protocol"]
-    distance = task["distance"]
-    kwargs   = task["kwargs"]
-
-    if proto == "BB84":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_BB84(**kwargs)
-        return {"protocol": proto, "distance": distance,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "B92":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_B92(**kwargs)
-        return {"protocol": proto, "distance": distance,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "COW":
-        QBER, TH, LAT, SKR, LOSS, RS, VIS = simulation_COW(**kwargs)
-        return {"protocol": proto, "distance": distance,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS,
-                "visibility": _safe_mean(VIS)}
-
-    elif proto == "BB84+Eve":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_BB84_Eve(**kwargs)
-        return {"protocol": proto, "distance": distance,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "B92+Eve":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_B92_Eve(**kwargs)
-        return {"protocol": proto, "distance": distance,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "COW+Eve":
-        QBER, TH, LAT, SKR, LOSS, RS, VIS = simulation_COW_Eve(**kwargs)
-        return {"protocol": proto, "distance": distance,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS,
-                "visibility": _safe_mean(VIS)}
-
-    else:
-        raise ValueError(f"Unknown protocol: {proto}")
-
-
-def _worker_keysize(task: dict):
-    """Execute one (protocol, keysize) simulation and return a results dict.
-
-    Identical logic to _worker_distance but keyed on 'keysize' instead.
-    """
-    proto   = task["protocol"]
-    keysize = task["keysize"]
-    kwargs  = task["kwargs"]
-
-    if proto == "BB84":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_BB84(**kwargs)
-        return {"protocol": proto, "keysize": keysize,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "B92":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_B92(**kwargs)
-        return {"protocol": proto, "keysize": keysize,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "COW":
-        QBER, TH, LAT, SKR, LOSS, RS, VIS = simulation_COW(**kwargs)
-        return {"protocol": proto, "keysize": keysize,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS,
-                "visibility": _safe_mean(VIS)}
-
-    elif proto == "BB84+Eve":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_BB84_Eve(**kwargs)
-        return {"protocol": proto, "keysize": keysize,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "B92+Eve":
-        QBER, TH, LAT, SKR, LOSS, RS = simulation_B92_Eve(**kwargs)
-        return {"protocol": proto, "keysize": keysize,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS}
-
-    elif proto == "COW+Eve":
-        QBER, TH, LAT, SKR, LOSS, RS, VIS = simulation_COW_Eve(**kwargs)
-        return {"protocol": proto, "keysize": keysize,
-                "skr": SKR, "qber": _safe_mean(QBER),
-                "throughputs": TH, "latency": LAT, "loss": LOSS, "rs": RS,
-                "visibility": _safe_mean(VIS)}
-
-    else:
-        raise ValueError(f"Unknown protocol: {proto}")
-
-
-
+def _unpack(res):
+    base = (res["qber"], res["throughputs"], res["latency"],
+            res["skr"], res["loss"], res["rs"])
+    return base + (res["visibility"],) if "visibility" in res else base
+ 
+ 
+def simulation_BB84(*a, **kw):     return _unpack(run_qkd_simulation("BB84", *a, **kw))
+def simulation_B92(*a, **kw):      return _unpack(run_qkd_simulation("B92", *a, **kw))
+def simulation_COW(*a, **kw):      return _unpack(run_qkd_simulation("COW", *a, **kw))
+def simulation_BB84_Eve(*a, **kw): return _unpack(run_qkd_simulation("BB84+Eve", *a, **kw))
+def simulation_B92_Eve(*a, **kw):  return _unpack(run_qkd_simulation("B92+Eve", *a, **kw))
+def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", *a, **kw))
+ 
+ 
 # ═══════════════════════════════════════════════════════════════════════
 #  Parallel sweep functions
 # ═══════════════════════════════════════════════════════════════════════
-
-def _build_distance_tasks(runtime, d_list, channel_parameters, ls_params_cow, ls_params,
-                          detector_params, detector_params_cow, thermal_params, keysize, key_num, loss_parameters, thermal_params):
-    """Build a flat list of task dicts for every (protocol × distance) pair."""
-    att  = channel_parameters[1]
-    pfid = channel_parameters[2]
+def _compute_loss(distance, ls_params, loss_parameters):
+    """Forward the entire `loss_parameters` dict to channel_FSO_loss."""
+    return channel_FSO_loss(distance=distance, wavelength=ls_params["wavelength"], **loss_parameters)
+ 
+ 
+def _build_sweep_tasks(
+    sweep_var, sweep_values, *,
+    runtime, channel_parameters,
+    ls_params, ls_params_cow, detector_params, detector_params_cow,
+    keysize, key_num, loss_parameters, thermal_params,
+    protocols=None, extra_kwargs=None,
+):
+    """Build (protocol × value) tasks for any sweep variable."""
+    if protocols is None:
+        protocols = list(PROTOCOL_REGISTRY.keys())
+    extra_kwargs = extra_kwargs or {}
+ 
+    fixed_dist, att, pfid = channel_parameters
+    ls_lookup  = {"ls_params": ls_params, "ls_params_cow": ls_params_cow}
+    det_lookup = {"detector_params": detector_params, "detector_params_cow": detector_params_cow}
+ 
     tasks = []
-
-    for d in d_list:
-        common = dict(runtime=runtime, distance=d,
-                      polarization_fidelity=pfid, attenuation=att, keysize=keysize, key_num=key_num)
-        loss = channel_FSO_loss(distance=d, wavelength=ls_params["wavelength"], v_range=loss_parameters["v_range"],
-                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"], friction_velocity=loss_parameters["friction_velocity"], height=loss_parameters["height"],
-                     size_raindrop=loss_parameters["size_raindrop"], viscosity=loss_parameters["viscosity"], precipitation_rate=loss_parameters["precipitation_rate"], Q_scat=loss_parameters["Q_scat"])
-        
-        tasks.append({"protocol": "BB84", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "B92", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "COW", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow,
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "BB84+Eve", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "B92+Eve", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "COW+Eve", "distance": d,
-                      "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow,
-                                 "loss": loss, "thermal_params":thermal_params}})
+    for val in sweep_values:
+        # Distance/keysize need special handling because loss depends on distance
+        distance = val if sweep_var == "distance" else fixed_dist
+        ks       = val if sweep_var == "keysize"  else keysize
+        loss     = _compute_loss(distance, ls_params, loss_parameters)
+ 
+        for proto in protocols:
+            cfg = PROTOCOL_REGISTRY[proto]
+            kwargs = dict(
+                runtime=runtime, distance=distance,
+                polarization_fidelity=pfid, attenuation=att,
+                keysize=ks, key_num=key_num,
+                ls_params=ls_lookup[cfg["ls_key"]],
+                detector_params=det_lookup[cfg["det_key"]],
+                source_type=cfg["source_type"],
+                loss=loss, thermal_params=thermal_params,
+                **extra_kwargs,
+            )
+            # Any other sweep var (attenuation, eve_intercept_rate, …)
+            # is just forwarded by name.
+            if sweep_var not in ("distance", "keysize"):
+                kwargs[sweep_var] = val
+            tasks.append({"protocol": proto, "sweep_var": sweep_var,
+                          "sweep_val": val, "kwargs": kwargs})
     return tasks
-
-
-def _build_keysize_tasks(runtime, keysize_list, channel_parameters, ls_params_cow, ls_params,
-                         detector_params, detector_params_cow, key_num, loss_parameters, thermal_params):
-    """Build a flat list of task dicts for every (protocol × keysize) pair."""
-    dist = channel_parameters[0]
-    att  = channel_parameters[1]
-    pfid = channel_parameters[2]
-    loss = channel_FSO_loss(distance=dist, wavelength=ls_params["wavelength"], v_range=loss_parameters["v_range"],
-                     receiver_radius=loss_parameters["receiver_radius"], pressure=loss_parameters["pressure"], temperature=loss_parameters["temperature"], w_0=loss_parameters["w_0"], C_T=loss_parameters["C_T"], R_0=loss_parameters["R_0"], friction_velocity=loss_parameters["friction_velocity"], height=loss_parameters["height"],
-                     size_raindrop=loss_parameters["size_raindrop"], viscosity=loss_parameters["viscosity"], precipitation_rate=loss_parameters["precipitation_rate"], Q_scat=loss_parameters["Q_scat"])
-    tasks = []
-
-    for k in keysize_list:
-        common = dict(runtime=runtime, distance=dist,
-                      polarization_fidelity=pfid, attenuation=att, keysize=k, key_num=key_num)
-
-        tasks.append({"protocol": "BB84", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "B92", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "COW", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow,
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "BB84+Eve", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "B92+Eve", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params,
-                                 "detector_params": detector_params,
-                                 "source_type": "sps",
-                                 "loss": loss, "thermal_params":thermal_params}})
-
-        tasks.append({"protocol": "COW+Eve", "keysize": k,
-                      "kwargs": {**common, "ls_params": ls_params_cow,
-                                 "detector_params": detector_params_cow,
-                                 "loss": loss, "thermal_params":thermal_params}})
-    return tasks
-
-
-def _collect_distance_results(d_list, results_list):
-    """Organise raw worker results into the metrics dict keyed by distance."""
-    # Pre-allocate per-protocol containers
-    proto_keys = ["BB84", "B92", "COW", "BB84+Eve", "B92+Eve", "COW+Eve"]
-    data = {p: {} for p in proto_keys}     # protocol -> {distance: result_dict}
-
+ 
+ 
+def _worker(task):
+    """Run one simulation in a worker process."""
+    proto = task["protocol"]
+    sweep_var = task["sweep_var"]
+    sweep_val = task["sweep_val"]
+    res = run_qkd_simulation(proto, **task["kwargs"])
+    out = {"protocol": proto, sweep_var: sweep_val,
+           "skr": res["skr"], "qber": _safe_mean(res["qber"]),
+           "throughputs": res["throughputs"], "latency": res["latency"],
+           "loss": res["loss"], "rs": res["rs"]}
+    if "visibility" in res:
+        out["visibility"] = _safe_mean(res["visibility"])
+    return out
+ 
+ 
+def _collect_results(sweep_var, sweep_values, results_list, protocols):
+    """Reorganise raw per-task results into wide-format columns."""
+    data = {p: {} for p in protocols}
     for r in results_list:
-        data[r["protocol"]][r["distance"]] = r
-
-    # Build ordered metric lists
-    metrics = {"distance": np.array(d_list)}
-    for suffix, proto in [("BB84", "BB84"), ("B92", "B92"), ("COW", "COW"),
-                          ("BB84+Eve", "BB84+Eve"), ("B92+Eve", "B92+Eve"),
-                          ("COW+Eve", "COW+Eve")]:
-        skr, qber, th, lat, loss, rs = [], [], [], [], [], []
-        vis = []
-        for d in d_list:
-            r = data[proto].get(d, {})
-            skr.append(r.get("skr", np.nan))
-            qber.append(r.get("qber", np.nan))
-            th.append(r.get("throughputs", np.nan))
-            lat.append(r.get("latency", np.nan))
-            loss.append(r.get("loss", np.nan))
-            rs.append(r.get("rs", np.nan))
-            if "COW" in proto:
-                vis.append(r.get("visibility", np.nan))
-
-        metrics[f"R_sk-{suffix}"]       = np.array(skr)
-        metrics[f"QBER-{suffix}"]       = np.array(qber)
-        metrics[f"Throughputs-{suffix}"] = np.array(th)
-        metrics[f"Latency-{suffix}"]    = np.array(lat)
-        metrics[f"Loss-{suffix}"]       = np.array(loss)
-        metrics[f"R_s-{suffix}"]        = np.array(rs)
-        if "COW" in suffix:
-            metrics[f"Visibility-{suffix}"] = np.array(vis)
-
+        if r["protocol"] in data:
+            data[r["protocol"]][r[sweep_var]] = r
+ 
+    metrics = {sweep_var: np.array(sweep_values)}
+    for proto in protocols:
+        cols = list(_METRIC_COLS)
+        if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
+            cols.append(_VIS_COL)
+        for label, key in cols:
+            metrics[f"{label}-{proto}"] = np.array([data[proto].get(v, {}).get(key, np.nan) for v in sweep_values])
     return metrics
-
-
-def _collect_keysize_results(keysize_list, results_list):
-    """Organise raw worker results into the metrics dict keyed by keysize."""
-    proto_keys = ["BB84", "B92", "COW", "BB84+Eve", "B92+Eve", "COW+Eve"]
-    data = {p: {} for p in proto_keys}
-
-    for r in results_list:
-        data[r["protocol"]][r["keysize"]] = r
-
-    metrics = {"keysize": np.array(keysize_list)}
-    for suffix, proto in [("BB84", "BB84"), ("B92", "B92"), ("COW", "COW"),
-                          ("BB84+Eve", "BB84+Eve"), ("B92+Eve", "B92+Eve"),
-                          ("COW+Eve", "COW+Eve")]:
-        skr, qber, th, lat, loss, rs = [], [], [], [], [], []
-        vis = []
-        for k in keysize_list:
-            r = data[proto].get(k, {})
-            skr.append(r.get("skr", np.nan))
-            qber.append(r.get("qber", np.nan))
-            th.append(r.get("throughputs", np.nan))
-            lat.append(r.get("latency", np.nan))
-            loss.append(r.get("loss", np.nan))
-            rs.append(r.get("rs", np.nan))
-            if "COW" in proto:
-                vis.append(r.get("visibility", np.nan))
-
-        metrics[f"R_sk-{suffix}"]       = np.array(skr)
-        metrics[f"QBER-{suffix}"]       = np.array(qber)
-        metrics[f"Throughputs-{suffix}"] = np.array(th)
-        metrics[f"Latency-{suffix}"]    = np.array(lat)
-        metrics[f"Loss-{suffix}"]       = np.array(loss)
-        metrics[f"R_s-{suffix}"]        = np.array(rs)
-        if "COW" in suffix:
-            metrics[f"Visibility-{suffix}"] = np.array(vis)
-
-    return metrics
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Public parallel entry-points (drop-in replacements)
-# ═══════════════════════════════════════════════════════════════════════
-
-def sim_variable_distance(runtime, d_step, d_lim, channel_parameters,
-                          ls_params_cow, ls_params, detector_params, detector_params_cow,
-                          keysize, key_num, loss_parameters, thermal_params, max_workers=None):
-    """Parallel version of the original sim_variable_distance.
-
+ 
+ 
+def sim_variable(
+    sweep_var, sweep_values, *,
+    runtime, channel_parameters,
+    ls_params, ls_params_cow, detector_params, detector_params_cow,
+    key_num, loss_parameters, thermal_params,
+    keysize=10000, protocols=None,
+    output_csv=None, max_workers=None, extra_kwargs=None,
+):
+    """Parallel sweep over an arbitrary kwarg of run_qkd_simulation.
+ 
     Args:
-        max_workers (int | None): number of parallel processes.
-            Defaults to the number of CPU cores.
+        sweep_var: name of the parameter to sweep. Must be a kwarg of
+            run_qkd_simulation, e.g. 'distance', 'keysize', 'attenuation',
+            'polarization_fidelity', 'eve_intercept_rate',
+            'phase_noise_coefficient', 'interferometer_phase_error', ...
+        sweep_values: iterable of values to assign to `sweep_var`.
+        protocols: subset of PROTOCOL_REGISTRY keys (default: all).
+        output_csv: where to save results. Default: data/metrics_variable-<sweep_var>.csv
+        extra_kwargs: dict forwarded to every run_qkd_simulation call.
+ 
+    Returns:
+        dict of column_name -> np.ndarray (also saved as CSV).
     """
     if max_workers is None:
         max_workers = os.cpu_count() or 4
-
-    d_list = list(range(d_step, d_lim + 1, d_step))
-        
-    tasks = _build_distance_tasks(
-        runtime, d_list, channel_parameters,
-        ls_params_cow, ls_params, detector_params, detector_params_cow, keysize, key_num, loss_parameters, thermal_params)
-
+    if output_csv is None:
+        output_csv = f"data/metrics_variable-{sweep_var}.csv"
+    if protocols is None:
+        protocols = list(PROTOCOL_REGISTRY.keys())
+ 
+    sweep_values = list(sweep_values)
+    tasks = _build_sweep_tasks(
+        sweep_var, sweep_values,
+        runtime=runtime, channel_parameters=channel_parameters,
+        ls_params=ls_params, ls_params_cow=ls_params_cow,
+        detector_params=detector_params, detector_params_cow=detector_params_cow,
+        keysize=keysize, key_num=key_num,
+        loss_parameters=loss_parameters, thermal_params=thermal_params,
+        protocols=protocols, extra_kwargs=extra_kwargs,
+    )
     total = len(tasks)
-    results_list = []
-
     print(f"[parallel] Launching {total} tasks across {max_workers} workers "
-          f"({len(d_list)} distances × 6 protocols)")
-
+          f"({len(sweep_values)} {sweep_var}s × {len(protocols)} protocols)")
+ 
+    results = []
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_worker_distance, t): t for t in tasks}
+        futures = {pool.submit(_worker, t): t for t in tasks}
         for i, future in enumerate(as_completed(futures), 1):
-            task_info = futures[future]
+            t = futures[future]
             try:
-                result = future.result()
-                results_list.append(result)
+                results.append(future.result())
             except Exception as exc:
-                proto = task_info["protocol"]
-                dist  = task_info["distance"]
-                print(f"\n[parallel] WARNING: {proto} @ d={dist}m failed: {exc}")
-                # Insert a NaN placeholder so the rest of the simulation continues
-                fallback = {"protocol": proto, "distance": dist,
-                            "skr": np.nan, "qber": np.nan, "throughputs": np.nan,
-                            "latency": np.nan, "loss": np.nan, "rs": np.nan}
-                if "COW" in proto:
-                    fallback["visibility"] = np.nan
-                results_list.append(fallback)
-            pct = i / total * 100
-            print(f"\r[parallel] {i}/{total} done ({pct:.1f}%)", end="", flush=True)
-
-    print()  # newline after progress
-
-    metrics = _collect_distance_results(d_list, results_list)
-        
-    pd.DataFrame(metrics).to_csv('data/metrics_variable-distance.csv', index=False)
-    print("[parallel] Saved metrics_variable-distance.csv")
-
-def sim_variable_keysize(runtime, keysize_list, channel_parameters,
-                         ls_params_cow, ls_params, detector_params, detector_params_cow, key_num,
-                         loss_parameters, thermal_params, max_workers=None):
-    """Parallel version of the original sim_variable_keysize."""
-    if max_workers is None:
-        max_workers = os.cpu_count() or 4
-
-    tasks = _build_keysize_tasks(
-        runtime, keysize_list, channel_parameters,
-        ls_params_cow, ls_params, detector_params, detector_params_cow, key_num, loss_parameters, thermal_params)
-
-    total = len(tasks)
-    results_list = []
-
-    print(f"[parallel] Launching {total} tasks across {max_workers} workers "
-          f"({len(keysize_list)} keysizes × 6 protocols)")
-
-    with ProcessPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_worker_keysize, t): t for t in tasks}
-        for i, future in enumerate(as_completed(futures), 1):
-            task_info = futures[future]
-            try:
-                result = future.result()
-                results_list.append(result)
-            except Exception as exc:
-                proto = task_info["protocol"]
-                ks    = task_info["keysize"]
-                print(f"\n[parallel] WARNING: {proto} @ keysize={ks} failed: {exc}")
-                fallback = {"protocol": proto, "keysize": ks,
-                            "skr": np.nan, "qber": np.nan, "throughputs": np.nan,
-                            "latency": np.nan, "loss": np.nan, "rs": np.nan}
-                if "COW" in proto:
-                    fallback["visibility"] = np.nan
-                results_list.append(fallback)
-
-            pct = i / total * 100
-            print(f"\r[parallel] {i}/{total} done ({pct:.1f}%)", end="", flush=True)
-
+                proto, val = t["protocol"], t["sweep_val"]
+                print(f"\n[parallel] WARNING: {proto} @ {sweep_var}={val} "
+                      f"failed: {exc}")
+                fb = {"protocol": proto, sweep_var: val,
+                      "skr": np.nan, "qber": np.nan, "throughputs": np.nan,
+                      "latency": np.nan, "loss": np.nan, "rs": np.nan}
+                if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
+                    fb["visibility"] = np.nan
+                results.append(fb)
+            print(f"\r[parallel] {i}/{total} done ({i/total*100:.1f}%)",
+                  end="", flush=True)
     print()
-
-    metrics = _collect_keysize_results(keysize_list, results_list)
-
-    pd.DataFrame(metrics).to_csv('data/metrics_variable-keysize.csv', index=False)
-    print("[parallel] Saved metrics_variable-keysize.csv")
-
+ 
+    metrics = _collect_results(sweep_var, sweep_values, results, protocols)
+    os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
+    pd.DataFrame(metrics).to_csv(output_csv, index=False)
+    print(f"[parallel] Saved {output_csv}")
+    return metrics
+ 
+ 
+# -- Backwards-compatible wrappers for the original sweep API
+def sim_variable_distance(
+    runtime, d_step, d_lim, channel_parameters,
+    ls_params_cow, ls_params, detector_params, detector_params_cow,
+    keysize, key_num, loss_parameters, thermal_params, max_workers=None,
+):
+    return sim_variable(
+        "distance", range(d_step, d_lim + 1, d_step),
+        runtime=runtime, channel_parameters=channel_parameters,
+        ls_params=ls_params, ls_params_cow=ls_params_cow,
+        detector_params=detector_params, detector_params_cow=detector_params_cow,
+        keysize=keysize, key_num=key_num,
+        loss_parameters=loss_parameters, thermal_params=thermal_params,
+        max_workers=max_workers,
+    )
+ 
+ 
+def sim_variable_keysize(
+    runtime, keysize_list, channel_parameters,
+    ls_params_cow, ls_params, detector_params, detector_params_cow,
+    key_num, loss_parameters, thermal_params, max_workers=None,
+):
+    return sim_variable(
+        "keysize", keysize_list,
+        runtime=runtime, channel_parameters=channel_parameters,
+        ls_params=ls_params, ls_params_cow=ls_params_cow,
+        detector_params=detector_params, detector_params_cow=detector_params_cow,
+        key_num=key_num,
+        loss_parameters=loss_parameters, thermal_params=thermal_params,
+        max_workers=max_workers,
+    )
+ 
+ 
+# ═══════════════════════════════════════════════════════════════════════
+#  Execution driver
+# ═══════════════════════════════════════════════════════════════════════
 def run_simulation():
     start = time.time()
-    wavelength = 780
-    bandwidth = ...
+ 
+    # -- Light-source parameters
+    # Frequency and wavelength are adopted from
+    # 'THORLABS. DBR78TK, DBR79TK Low-Noise Laser Systems: user guide. Rev. B.: Thorlabs, Inc., 2025. Documento DOC-102639.'
+    wavelength = 780          # nm 
+    frequency = 8e6           # Hz
+    ls_params     = {"frequency": frequency, "wavelength": wavelength, "mean_photon_num": 1}
+    # The mean_photon_num for the COW protocol takes into account the number adopted in
+    # 'STUCKI, D. et al. Fast and simple one-way quantum key distribution. Applied Physics Letters, v. 87, n. 19, 2 nov. 2005.'
+    ls_params_cow = {"frequency": frequency, "wavelength": wavelength, "mean_photon_num": 0.5} 
+ 
+    # -- Detector parameters
+    # Detector efficiency, dark counts, temporal resolution, and count rate are derived from
+    # 'THORLABS. Single Photon Detectors SPDMH2, SPDMH3, SPDMH2F, SPDMH3F: operation manual. Versão 1.2.: Thorlabs GmbH, 2023. Documento MTN028160-D02.'
     count_rate = 20e6
-    ls_params = {"frequency": 8e6, "wavelength":wavelength, "mean_photon_num": 1}
-    ls_params_cow = {"frequency": 8e6, "wavelength":wavelength, "mean_photon_num": 0.5}
-    detector_params = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate},
-                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate}]
-    detector_params_cow = [{"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate},
-                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate},
-                       {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate}]
-    keysize = 10000
-    key_num = 1
-    # channel_parameters = (distance [in meters], attenuation [in dB/m], polarization_fidelity [in %])
+    det_template = {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate}
+    detector_params     = [dict(det_template) for _ in range(2)]
+    detector_params_cow = [dict(det_template) for _ in range(3)]
+ 
+    # -- (distance_m, attenuation_dB/m, polarization_fidelity)
     channel_parameters = (700, 0.0002, 0.97)
     
-    # Source of information on the factors that influence signal loss:
-    # From transmitter:
-    #     w_0:
-    #     R_0: para feixes colimados, adota-se R_0 = math.inf
-    #     transmitter_height:
-    # From receiver:
-    #     receiver_radius: https://www.sharpstar-optics.com/Products_1/79.html
-    #     receiver_height:
-    # From channel:
-    #     v_range:
-    #     pressure: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
-    #     temperature: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
-    #     C_T:
-    #     size_raindrop:
-    #     viscosity: Sutherland, W. (1893), "The viscosity of gases and molecular force", Philosophical Magazine, S. 5, 36, pp. 507-531 (1893).
-    #     precipitation_rate: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
-    #     Q_scat: Calculado utilizando 'Prahl, S. (2026). miepython: Pure python calculation of Mie scattering (Version 3.2.0) 
-    #               [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.7949263' e 'Xiaohong Quan and Edward S. Fry, "Empirical equation for the index of 
-    #               refraction of seawater," Appl. Opt. 34, 3477-3480 (1995)'
-    #     friction_velocity: https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
-    #     height = (transmitter_height+receiver_height)/2
-    loss_parameters = {"v_range":,
-                       "receiver_radius":10.3, "pressure":, "temperature":, "w_0":, "C_T":, "R_0":math.inf, "friction_velocity":, "height":,
-                       "size_raindrop":, "viscosity":None, "precipitation_rate":, "Q_scat":2}
-    diameter_Sensor = 1e-4 # meters (source: https://media.thorlabs.com/globalassets/items/s/sp/spd/spdmh2/mtn028160-d02.pdf?v=0116030233)
-    focal_distance = 0.7004 # meters (source: https://www.sharpstar-optics.com/Products_1/79.html)
-    Omega_fov = 2*math.pi*(1-math.cos(2*atan(diameter_Sensor/(2*focal_distance))))
-    # thermal_params = {"delta_lambda_nm": ..., "delta_t_ns": 1e9/(count_rate of detector_params), "omega_fov_sr": ..., "a_R_cm": loss_parameters["receiver_radius"], "B_sky": ...}
-    thermal_params = {"delta_lambda_nm": ((1e9*bandwidth*(wavelength*1e-9)**2)/_c), "delta_t_ns": (1e9/count_rate), "omega_fov_sr": Omega_fov, "a_R_cm": loss_parameters["receiver_radius"], "B_sky": }
-    sim_variable_distance(runtime=1000, d_step=1000, d_lim=100000, channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, keysize=keysize, key_num=key_num, loss_parameters=loss_parameters, thermal_params=thermal_params)
-    sim_variable_keysize(runtime=1000, keysize_list=[20, 45, 50, 100, 200, 400, 800, 1600, 5000, 20000, 40000, 80000, 100000], channel_parameters=channel_parameters, ls_params_cow=ls_params_cow, ls_params=ls_params, detector_params=detector_params, detector_params_cow=detector_params_cow, key_num=key_num, loss_parameters=loss_parameters, thermal_params=thermal_params)
+    temperature = 298.15
+    friction_velocity = 200
+    height_link = 800
+    # Sunset and sunrise on May 11, 2026
+    cn = cn2(time = 12, sunset = 17,566667, sunrise = 6.516667, temperature = temperature, wind_speed = friction_velocity/100, relative_humidity = 0.47, height = (720 + height_link/100))
+ 
+    # -- FSO loss parameters (forwarded as **kwargs to channel_FSO_loss)
+    loss_parameters = {                          # Source of information on the factors that influence signal loss:
+        "v_range":            10,                #  Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. Geneva, Switzerland: World Meteorological Organization, 2024. p. 352–374'
+        "receiver_radius":    10.3,              #  https://www.sharpstar-optics.com/Products_1/79.html
+        "pressure":           927,               #  https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+        "temperature":        temperature,       #  https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+        "w_0":                5,                 #  Adopted as a first approximation until more precise measurements are available.
+        "C_n2":               cn,                #  Calculated using cn2 function of QCLoss.loss
+        "R_0":                math.inf,          #  For collimated beams, R_0 = math.inf is adopted
+        "friction_velocity":  friction_velocity, #  https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+        "height":             height_link,       #  (transmitter_height+receiver_height)/2
+        "size_raindrop":      0.1,               #  FADHIL, H. A. et al. Optimization of free space optics parameters: An optimum solution for bad weather conditions. v. 124, n. 19, p. 3969–3973, 1 out. 2013. 
+        "viscosity":          None,              #  Sutherland, W. (1893), "The viscosity of gases and molecular force", Philosophical Magazine, S. 5, 36, pp. 507-531 (1893)
+        "precipitation_rate": 0,                 #  https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+        "Q_scat":             2}                 #  Calculated using 'Prahl, S. (2026). miepython: Pure python calculation of Mie scattering (Version 3.2.0) 
+                                                 #    [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.7949263' and
+                                                 #    'Xiaohong Quan and Edward S. Fry, "Empirical equation for the index of refraction of seawater," Appl. Opt. 34, 3477-3480 (1995)'
+ 
+    # -- Thermal-noise parameters
 
-    end = time.time()
-    
-    simulator_metrics = {"Total_execution_time_(seconds)": [end-start]}
-    pd.DataFrame(simulator_metrics).to_csv('data/simulator_metrics.csv', index=False)
-
+    diameter_sensor = 1e-4    # m   (https://media.thorlabs.com/globalassets/items/s/sp/spd/spdmh2/mtn028160-d02.pdf?v=0116030233)
+    focal_distance  = 0.7004  # m   (https://www.sharpstar-optics.com/Products_1/79.html)
+    omega_fov = 2 * math.pi * (1 - math.cos(2 * math.atan(diameter_sensor / (2 * focal_distance))))
+    bandwidth  = 492767915845 # Hz (492 GHz bandwidth for a delta_lambda_nm ≈ 1 nm)
+    thermal_params = {
+        "delta_lambda_nm": (bandwidth*wavelength** 2) / (_c*1e9),
+        "delta_t_ns":      1e9 / count_rate,
+        "omega_fov_sr":    omega_fov,
+        "a_R_cm":          loss_parameters["receiver_radius"],
+        "B_sky":           1e-2,                # First approximation adopted of 'PIRANDOLA, S. Limits and security of free-space quantum communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021.'
+    }                                           # A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
+ 
+    # -- Common kwargs reused by every sweep
+    common = dict(
+        runtime=1000,
+        channel_parameters=channel_parameters,
+        ls_params=ls_params, ls_params_cow=ls_params_cow,
+        detector_params=detector_params,
+        detector_params_cow=detector_params_cow,
+        key_num=1,
+        loss_parameters=loss_parameters,
+        thermal_params=thermal_params,
+    )
+ 
+    # -- Sweep #1: distance
+    sim_variable("distance", range(1000, 100001, 1000),
+                 keysize=10000, **common)
+ 
+    # -- Sweep #2: keysize
+    sim_variable("keysize",
+                 [20, 45, 50, 100, 200, 400, 800, 1600,
+                  5000, 20000, 40000, 80000, 100000],
+                 **common)
+ 
+    # -- Adding a new sweep is a one-liner. Examples:
+    # sim_variable("attenuation",       [1e-4, 2e-4, 4e-4, 8e-4],
+    #              keysize=10_000, **common)
+    # sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9],
+    #              keysize=10_000,
+    #              protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
+    # sim_variable("polarization_fidelity", [0.90, 0.93, 0.96, 0.99],
+    #              keysize=10_000, **common)
+ 
+    pd.DataFrame({"Total_execution_time_(seconds)":
+                  [time.time() - start]}
+                 ).to_csv("data/simulator_metrics.csv", index=False)
+ 
+ 
 if __name__ == "__main__":
     run_simulation()

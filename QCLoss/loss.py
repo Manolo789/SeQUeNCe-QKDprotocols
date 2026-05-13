@@ -38,6 +38,79 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import miepython
 import math
 
+def cn2(time: float, sunset: float, sunrise: float, temperature: float, wind_speed: float, relative_humidity: float, height: float):
+    '''
+    Calculation of the refractive index structure constant.
+    Based on the results of the article:
+    [1] BENDERSKY, S.; KOPEIKA, N. S.; BLAUNSTEIN, N. Atmospheric optical turbulence 
+     over land in middle east coastal environments: prediction modeling and measurements. 
+     Applied Optics, v. 43, n. 20, p. 4070, 9 jul. 2004.
+
+    [2] ANDREWS, L. C.; PHILLIPS, R. L. Laser Beam Propagation Through Random Media.
+     SPIE-International Society for Optical Engineering, 2005. p. 481
+
+    Attributes:
+        time: Hora atual (Exemplo: 15h42m, então time = 15.7) [h]
+        sunset: Pôr do sol [h]
+        sunrise: Nascer do sol [h]
+        temperature: Temperatura do ar [Kelvin]
+        wind_speed: Velocidade do Vento [m/s]
+        relative_humidity: Umidade Relativa [%]
+        height: Altitude [m]
+        
+    Obs: Pelo fato do simulador utilizar altitudes baixas (<1 Km), para fins 
+     práticos considera-se wind_speed é aproximadamente igual a omega
+     da equação 1 na referência 2.
+    '''
+    th = 12*(time - sunrise)/(sunset - sunrise)
+    
+    if th <= -4:
+        w = 0.11
+    elif -4 < th <= -3:
+        w = 0.11
+    elif -3 < th <= -2:
+        w = 0.07
+    elif -2 < th <= -1:
+        w = 0.08
+    elif -1 < th <= 0:
+        w = 0.06
+    elif 0 < th <= 1:
+        w = 0.05
+    elif 1 < th <= 2:
+        w = 0.1
+    elif 2 < th <= 3:
+        w = 0.51
+    elif 3 < th <= 4:
+        w = 0.75
+    elif 4 < th <= 5:
+        w = 0.95
+    elif 5 < th <= 6:
+        w = 1.0
+    elif 6 < th <= 7:
+        w = 0.90
+    elif 7 < th <= 8:
+        w = 0.80
+    elif 8 < th <= 9:
+        w = 0.59
+    elif 9 < th <= 10:
+        w = 0.32
+    elif 10 < th <= 11:
+        w = 0.22
+    elif 11 < th <= 12:
+        w = 0.10
+    elif 12 < th <= 13:
+        w = 0.08
+    elif 13 < th:
+        w = 0.13
+    # 9ºC <= temperature <= 35ºC, 0 <= wind_speed <= 10 m/s, 14% <= relative_humidity <= 92%
+    if (282.15 <= temperature <= 308,15) and (0 <= wind_speed <= 10) and (0.14 <= relative_humidity <= 0.92):
+        forT = temperature*2*1e-15
+        forU = -wind_speed*2.5*1e-15 + (wind_speed**2)*1.2*1e-15 - (wind_speed**3)*8.5*1e-17
+        forRH = -(relative_humidity)*2.8*1e-15 + (relative_humidity**2)*2.9*1e-17 - (relative_humidity**3)*1.1*1e-19
+        c0 = (w*3.8*1e-14 + forT + forU + forRH -5.3*1e-13)/(15**(-4/3))
+        return (5.96e-3)*((wind_speed/27)**2)*(h**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
+        
+
 def n_value(wavelength: float, temperature: float, salinity: int = 0):
     '''
     Calculation of the refractive index of a raindrop.
@@ -54,8 +127,8 @@ def n_value(wavelength: float, temperature: float, salinity: int = 0):
 
 
 def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
-                     receiver_radius: float, pressure: float, temperature: float, w_0: float, C_T: float, R_0: float, friction_velocity: float, height: float,
-                     size_raindrop: float, viscosity: float, precipitation_rate: float, Q_scat: float, density: float = 1.0, gravitation: float = 980.0):
+                     receiver_radius: float, pressure: float, temperature: float, w_0: float, R_0: float, friction_velocity: float, height: float,
+                     size_raindrop: float, viscosity: float, precipitation_rate: float, Q_scat: float, C_n2: float = None, C_T2: float = None, density: float = 1.0, gravitation: float = 980.0):
     '''
     The implementation of the attenuation system in the channel was 
     carried out following the model proposed in the following references:
@@ -89,7 +162,7 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         pressure: Pressão atmosférica [milibar]
         temperature: Temperatura ao longo do canal [Kelvin]
         w_0: Raio inicial do feixe gaussiano (característica do emissor) [cm]
-        C_T: Constante de estrutura de temperatura
+        C_T²: Constante de estrutura de temperatura
         R_0: Raio de curvatura inicial da frente de onda do feixe gaussiano (para feixes colimados, adota-se R_0 = math.inf)
         air_density: Densidade do ar [g/cm³]
         friction_velocity: Velocidade de atrito [cm/s]
@@ -141,7 +214,8 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     eta_fog = math.exp(-distance*(beta_fog)*1e-3)
     
     # Atmospheric turbulence (referência 1 e 2)
-    C_n2 = (((77.6*1e-6*pressure)/(temperature**2))**2)*((1+((0.00753)/((wavelength/1000)**2)))**2)*C_T**2 # Parâmetro do índice de refração (referência 5)
+    if C_n2 is None:
+        C_n2 = (((77.6*1e-6*pressure)/(temperature**2))**2)*((1+((0.00753)/((wavelength/1000)**2)))**2)*C_T2 # Parâmetro do índice de refração (referência 5)
     k_wave = 2*math.pi/wavelength_m # Número de onda
     Z_R = (math.pi*(w_0*0.01)**2)/wavelength_m # Comprimento do feixe de Rayleigh
     A_rytov = 1.23*(k_wave**(7/6))*C_n2*(distance**(11/6)) # Parâmetro de Rytov
