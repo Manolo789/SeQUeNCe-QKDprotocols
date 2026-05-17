@@ -12,7 +12,7 @@ from sequence.qkd.B92 import pair_b92_protocols
 from sequence.qkd.COW import pair_cow_protocols
 from sequence.topology.node import QKDNode, EveNode
 from sequence.utils.encoding_cow import time_bin_cow
-from QCLoss.loss import channel_FSO_loss, cn2
+from QCLoss.loss import channel_FSO_loss, cn2, polarization_fidelity, phase_noise, make_atmospheric_phase_process, wind_speed_perp
 import sequence.utils.log as log
 import numpy as np
 import pandas as pd
@@ -164,7 +164,7 @@ def run_qkd_simulation(
     keysize=256, key_num=math.inf,
     source_type=None, loss=None, thermal_params=None,
     phase_noise_coefficient=0.01, interferometer_phase_error=0.20,
-    eve_intercept_rate=0.9, eve_position=0.5,
+    eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
  
@@ -183,11 +183,42 @@ def run_qkd_simulation(
         log.set_logger_level("DEBUG")
         log.track_module(cfg["log_module"])
         log.track_module("light_source")
- 
+
+    # -- Atmospheric piston: only meaningful for COW (time_bin_cow encoding)
+    atm_proc_ab = None      # Alice → (Bob or Eve) -- segmento 1
+    atm_proc_eb = None      # Eve → Bob            -- segmento 2 (só se has_eve)
+    if is_cow and loss_parameters is not None:
+        if cfg["has_eve"]:
+            d_seg1 = distance * eve_position
+            d_seg2 = distance * (1.0 - eve_position)
+            atm_proc_ab = make_atmospheric_phase_process(
+                distance=d_seg1,
+                timeline_stop_time_ps=runtime * 1e12,
+                ls_params=ls_params,
+                loss_parameters=loss_parameters,
+                seed=3,
+            )
+            atm_proc_eb = make_atmospheric_phase_process(
+                distance=d_seg2,
+                timeline_stop_time_ps=runtime * 1e12,
+                ls_params=ls_params,
+                loss_parameters=loss_parameters,
+                seed=4,
+            )
+        else:
+            atm_proc_ab = make_atmospheric_phase_process(
+                distance=distance,
+                timeline_stop_time_ps=runtime * 1e12,
+                ls_params=ls_params,
+                loss_parameters=loss_parameters,
+                seed=3,
+            )
+
     # -- Quantum channels (qc0 carries Eve if applicable)
     qc_kwargs = dict(distance=distance,
                      polarization_fidelity=polarization_fidelity,
-                     attenuation=attenuation, loss=loss)
+                     attenuation=attenuation, loss=loss,
+                     atmospheric_phase_process=atm_proc_ab)
     if is_cow:
         qc_kwargs["phase_noise_coefficient"] = phase_noise_coefficient
  
@@ -196,7 +227,7 @@ def run_qkd_simulation(
         if cfg["encoding"] is not None:
             eve_kwargs["encoding"] = cfg["encoding"]
         eve = EveNode("eve", tl, **eve_kwargs)
-        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, eve_position=eve_position, **qc_kwargs)
+        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, eve_position=eve_position, atmospheric_phase_process_seg2=atm_proc_eb, **qc_kwargs)
     else:
         qc0 = QuantumChannel("qc0", tl, **qc_kwargs)
     qc1 = QuantumChannel("qc1", tl, **qc_kwargs)
@@ -245,8 +276,6 @@ def run_qkd_simulation(
     tl.run()
  
     proto_obj = alice.protocol_stack[0]
-    if loss is None:
-        loss = 1-10**((distance*attenuation)/(-10))
     if cfg["needs_visibility"]:
         vis = proto_obj.visibility
         qber, th, lat, skr, rs = _collect_cow_metrics(proto_obj, vis, ls_params, loss)
@@ -278,8 +307,35 @@ def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", 
 def _compute_loss(distance, ls_params, loss_parameters):
     """Forward the entire `loss_parameters` dict to channel_FSO_loss."""
     return channel_FSO_loss(distance=distance, wavelength=ls_params["wavelength"], **loss_parameters)
- 
- 
+
+def _compute_polarization_fidelity(distance, ls_params, detector_params, loss_parameters):
+    """Forward loss_parameters to polarization_fidelity for the given
+    distance."""
+    return polarization_fidelity(distance = distance, 
+        wavelength = ls_params["wavelength"], 
+        w_0 = loss_parameters["w_0"], 
+        receiver_radius = loss_parameters["receiver_radius"], 
+        photon_number = ls_params["mean_photon_num"], 
+        pulse_duration = 1/ls_params["frequency"], 
+        detection_time = 1/detector_params["count_rate"], 
+        friction_velocity = loss_parameters["friction_velocity"], 
+        height = loss_parameters["height"], 
+        C_n2 = loss_parameters["C_n2"],
+    )
+
+def _compute_phase_noise_coefficient(ls_params, loss_parameters):
+    """Return phase-noise coefficient in rad/sqrt(m) for the given
+       channel.  L_0 is derived from `height_link` via the surface-layer
+       model unless the user provides `outer_scale` explicitly in
+       `loss_parameters`.
+    """
+    return phase_noise(wavelength: float, C_n2: float, friction_velocity: float, height: float
+        wavelength=ls_params["wavelength"],
+        C_n2=loss_parameters["C_n2"],
+        friction_velocity=loss_parameters["friction_velocity"],
+        height=loss_parameters["height"],
+    )
+
 def _build_sweep_tasks(
     sweep_var, sweep_values, *,
     runtime, channel_parameters,
@@ -301,10 +357,14 @@ def _build_sweep_tasks(
         # Distance/keysize need special handling because loss depends on distance
         distance = val if sweep_var == "distance" else fixed_dist
         ks       = val if sweep_var == "keysize"  else keysize
-        loss     = _compute_loss(distance, ls_params, loss_parameters)
  
         for proto in protocols:
             cfg = PROTOCOL_REGISTRY[proto]
+            loss = _compute_loss(distance, ls_lookup[cfg["ls_key"]], loss_parameters)
+            if pfid is None:
+                pfid = _compute_polarization_fidelity(distance, ls_lookup[cfg["ls_key"]], det_lookup[cfg["det_key"]], loss_parameters)
+            pnc = _compute_phase_noise_coefficient(ls_lookup[cfg["ls_key"]], loss_parameters)
+            
             kwargs = dict(
                 runtime=runtime, distance=distance,
                 polarization_fidelity=pfid, attenuation=att,
@@ -313,8 +373,11 @@ def _build_sweep_tasks(
                 detector_params=det_lookup[cfg["det_key"]],
                 source_type=cfg["source_type"],
                 loss=loss, thermal_params=thermal_params,
-                **extra_kwargs,
+                loss_parameters=loss_parameters, **extra_kwargs,
             )
+            
+            kwargs["phase_noise_coefficient"] = pnc
+            
             # Any other sweep var (attenuation, eve_intercept_rate, …)
             # is just forwarded by name.
             if sweep_var not in ("distance", "keysize"):
@@ -480,19 +543,20 @@ def run_simulation():
     # -- Detector parameters
     # Detector efficiency, dark counts, temporal resolution, and count rate are derived from
     # 'THORLABS. Single Photon Detectors SPDMH2, SPDMH3, SPDMH2F, SPDMH3F: operation manual. Versão 1.2.: Thorlabs GmbH, 2023. Documento MTN028160-D02.'
-    count_rate = 20e6
-    det_template = {"efficiency": 0.65, "dark_count": 100, "time_resolution": 1000, "count_rate": count_rate}
+    count_rate = 20e6         # Hz
+    time_resolution = 1000    # ps
+    det_template = {"efficiency": 0.65, "dark_count": 100, "time_resolution": time_resolution, "count_rate": count_rate}
     detector_params     = [dict(det_template) for _ in range(2)]
     detector_params_cow = [dict(det_template) for _ in range(3)]
+    
+    temperature = 298.15      # Kelvin
+    friction_velocity = 200   # cm/s
+    height_link = 800         # cm
+    # Sunset and sunrise on May 11, 2026
+    cn = cn2(time = 12, sunset = 17,566667, sunrise = 6.516667, temperature = temperature, wind_speed = friction_velocity/100, rms_wind_speed=21, relative_humidity = 0.47, height = (720 + height_link/100))
  
     # -- (distance_m, attenuation_dB/m, polarization_fidelity)
-    channel_parameters = (700, 0.0002, 0.97)
-    
-    temperature = 298.15
-    friction_velocity = 200
-    height_link = 800
-    # Sunset and sunrise on May 11, 2026
-    cn = cn2(time = 12, sunset = 17,566667, sunrise = 6.516667, temperature = temperature, wind_speed = friction_velocity/100, relative_humidity = 0.47, height = (720 + height_link/100))
+    channel_parameters = (700, 0.0002, None)
  
     # -- FSO loss parameters (forwarded as **kwargs to channel_FSO_loss)
     loss_parameters = {                          # Source of information on the factors that influence signal loss:
@@ -504,6 +568,7 @@ def run_simulation():
         "C_n2":               cn,                #  Calculated using cn2 function of QCLoss.loss
         "R_0":                math.inf,          #  For collimated beams, R_0 = math.inf is adopted
         "friction_velocity":  friction_velocity, #  https://www.labmicro.iag.usp.br/Data/data_PMIAG.html
+        "wind_speed_perp": wind_speed_perp((720 + height_link/100), friction_velocity/100),
         "height":             height_link,       #  (transmitter_height+receiver_height)/2
         "size_raindrop":      0.1,               #  FADHIL, H. A. et al. Optimization of free space optics parameters: An optimum solution for bad weather conditions. v. 124, n. 19, p. 3969–3973, 1 out. 2013. 
         "viscosity":          None,              #  Sutherland, W. (1893), "The viscosity of gases and molecular force", Philosophical Magazine, S. 5, 36, pp. 507-531 (1893)
@@ -511,17 +576,15 @@ def run_simulation():
         "Q_scat":             2}                 #  Calculated using 'Prahl, S. (2026). miepython: Pure python calculation of Mie scattering (Version 3.2.0) 
                                                  #    [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.7949263' and
                                                  #    'Xiaohong Quan and Edward S. Fry, "Empirical equation for the index of refraction of seawater," Appl. Opt. 34, 3477-3480 (1995)'
- 
-    # -- Thermal-noise parameters
 
+    # -- Thermal-noise parameters
     diameter_sensor = 1e-4    # m   (https://media.thorlabs.com/globalassets/items/s/sp/spd/spdmh2/mtn028160-d02.pdf?v=0116030233)
     focal_distance  = 0.7004  # m   (https://www.sharpstar-optics.com/Products_1/79.html)
-    omega_fov = 2 * math.pi * (1 - math.cos(2 * math.atan(diameter_sensor / (2 * focal_distance))))
     bandwidth  = 492767915845 # Hz (492 GHz bandwidth for a delta_lambda_nm ≈ 1 nm)
     thermal_params = {
         "delta_lambda_nm": (bandwidth*wavelength** 2) / (_c*1e9),
         "delta_t_ns":      1e9 / count_rate,
-        "omega_fov_sr":    omega_fov,
+        "omega_fov_sr":    2 * math.pi * (1 - math.cos(2 * math.atan(diameter_sensor / (2 * focal_distance)))),
         "a_R_cm":          loss_parameters["receiver_radius"],
         "B_sky":           1e-2,                # First approximation adopted of 'PIRANDOLA, S. Limits and security of free-space quantum communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021.'
     }                                           # A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
