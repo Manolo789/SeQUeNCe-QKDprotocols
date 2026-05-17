@@ -13,6 +13,7 @@ from sequence.qkd.COW import pair_cow_protocols
 from sequence.topology.node import QKDNode, EveNode
 from sequence.utils.encoding_cow import time_bin_cow
 from QCLoss.loss import channel_FSO_loss, cn2, polarization_fidelity, phase_noise, make_atmospheric_phase_process, wind_speed_perp
+from scenarios import materialize
 import sequence.utils.log as log
 import numpy as np
 import pandas as pd
@@ -193,14 +194,14 @@ def run_qkd_simulation(
             d_seg2 = distance * (1.0 - eve_position)
             atm_proc_ab = make_atmospheric_phase_process(
                 distance=d_seg1,
-                timeline_stop_time_ps=runtime * 1e12,
+                timeline_stop_time_ps=tl.stop_time,
                 ls_params=ls_params,
                 loss_parameters=loss_parameters,
                 seed=3,
             )
             atm_proc_eb = make_atmospheric_phase_process(
                 distance=d_seg2,
-                timeline_stop_time_ps=runtime * 1e12,
+                timeline_stop_time_ps=tl.stop_time,
                 ls_params=ls_params,
                 loss_parameters=loss_parameters,
                 seed=4,
@@ -208,7 +209,7 @@ def run_qkd_simulation(
         else:
             atm_proc_ab = make_atmospheric_phase_process(
                 distance=distance,
-                timeline_stop_time_ps=runtime * 1e12,
+                timeline_stop_time_ps=tl.stop_time,
                 ls_params=ls_params,
                 loss_parameters=loss_parameters,
                 seed=3,
@@ -223,11 +224,14 @@ def run_qkd_simulation(
         qc_kwargs["phase_noise_coefficient"] = phase_noise_coefficient
  
     if cfg["has_eve"]:
+        pnc_seg1 = _compute_phase_noise_coefficient(ls_lookup[cfg["ls_key"]], loss_parameters)
+        pnc_seg2 = pnc_seg1 
+        
         eve_kwargs = dict(intercept_rate=eve_intercept_rate, seed=2)
         if cfg["encoding"] is not None:
             eve_kwargs["encoding"] = cfg["encoding"]
         eve = EveNode("eve", tl, **eve_kwargs)
-        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, eve_position=eve_position, atmospheric_phase_process_seg2=atm_proc_eb, **qc_kwargs)
+        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, eve_position=eve_position, atmospheric_phase_process_seg2=atm_proc_eb, phase_noise_coefficient=pnc_seg1, phase_noise_coefficient_seg2=pnc_seg2, **qc_kwargs)
     else:
         qc0 = QuantumChannel("qc0", tl, **qc_kwargs)
     qc1 = QuantumChannel("qc1", tl, **qc_kwargs)
@@ -317,7 +321,7 @@ def _compute_polarization_fidelity(distance, ls_params, detector_params, loss_pa
         receiver_radius = loss_parameters["receiver_radius"], 
         photon_number = ls_params["mean_photon_num"], 
         pulse_duration = 1/ls_params["frequency"], 
-        detection_time = 1/detector_params["count_rate"], 
+        detection_time = 1/detector_params[0]["count_rate"], 
         friction_velocity = loss_parameters["friction_velocity"], 
         height = loss_parameters["height"], 
         C_n2 = loss_parameters["C_n2"],
@@ -329,7 +333,7 @@ def _compute_phase_noise_coefficient(ls_params, loss_parameters):
        model unless the user provides `outer_scale` explicitly in
        `loss_parameters`.
     """
-    return phase_noise(wavelength: float, C_n2: float, friction_velocity: float, height: float
+    return phase_noise(
         wavelength=ls_params["wavelength"],
         C_n2=loss_parameters["C_n2"],
         friction_velocity=loss_parameters["friction_velocity"],
@@ -348,7 +352,7 @@ def _build_sweep_tasks(
         protocols = list(PROTOCOL_REGISTRY.keys())
     extra_kwargs = extra_kwargs or {}
  
-    fixed_dist, att, pfid = channel_parameters
+    fixed_dist, att, pfid_initial = channel_parameters
     ls_lookup  = {"ls_params": ls_params, "ls_params_cow": ls_params_cow}
     det_lookup = {"detector_params": detector_params, "detector_params_cow": detector_params_cow}
  
@@ -361,8 +365,7 @@ def _build_sweep_tasks(
         for proto in protocols:
             cfg = PROTOCOL_REGISTRY[proto]
             loss = _compute_loss(distance, ls_lookup[cfg["ls_key"]], loss_parameters)
-            if pfid is None:
-                pfid = _compute_polarization_fidelity(distance, ls_lookup[cfg["ls_key"]], det_lookup[cfg["det_key"]], loss_parameters)
+            pfid = (pfid_initial if pfid_initial is not None else _compute_polarization_fidelity(distance, ls_lookup[cfg["ls_key"]], det_lookup[cfg["det_key"]], loss_parameters)
             pnc = _compute_phase_noise_coefficient(ls_lookup[cfg["ls_key"]], loss_parameters)
             
             kwargs = dict(
@@ -425,8 +428,7 @@ def sim_variable(
     ls_params, ls_params_cow, detector_params, detector_params_cow,
     key_num, loss_parameters, thermal_params,
     keysize=10000, protocols=None,
-    output_csv=None, max_workers=None, extra_kwargs=None,
-):
+    output_csv=None, max_workers=None, extra_kwargs=None):
     """Parallel sweep over an arbitrary kwarg of run_qkd_simulation.
  
     Args:
@@ -490,8 +492,97 @@ def sim_variable(
     print(f"[parallel] Saved {output_csv}")
     return metrics
  
- 
+
+def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
+                 ls_params, ls_params_cow, detector_params, detector_params_cow,
+                 keysize, key_num, base_loss_parameters, base_thermal_params,
+                 materialize_fn, protocols=None, output_csv=None,
+                 max_workers=None, extra_kwargs=None):
+    """Sweep over scenario points (e.g., hours of the day).
+
+    Args:
+        label (str): name of the independent variable for the output CSV
+            (e.g. 'hour').
+        scenario_points (list): list of opaque tokens passed to materialize_fn.
+        materialize_fn (callable): function(token, **kwargs) → (loss_parameters,
+            thermal_params, ls_params_override).  Returning a 3-tuple lets the
+            cenario also tweak the light source (e.g. emission frequency for
+            a different laser model).
+        ... (other args as in sim_variable)
+    """
+    
+    if protocols is None:
+        protocols = list(PROTOCOL_REGISTRY.keys())
+    if max_workers is None:
+        max_workers = os.cpu_count() or 4
+    if output_csv is None:
+        output_csv = f"data/metrics_scenario-{label}.csv"
+
+    fixed_dist, att, pfid_initial = channel_parameters
+    ls_lookup  = {"ls_params": ls_params, "ls_params_cow": ls_params_cow}
+    det_lookup = {"detector_params": detector_params,
+                  "detector_params_cow": detector_params_cow}
+
+    tasks = []
+    for token in scenario_points:
+        lp_token, tp_token, ls_overrides = materialize_fn(
+            token, base_loss_parameters=base_loss_parameters,
+            base_thermal_params=base_thermal_params, ls_params=ls_params)
+
+        for proto in protocols:
+            cfg = PROTOCOL_REGISTRY[proto]
+            ls_p  = {**ls_lookup[cfg["ls_key"]], **(ls_overrides or {})}
+            det_p = det_lookup[cfg["det_key"]]
+            loss  = _compute_loss(fixed_dist, ls_p, lp_token)
+            pfid  = (pfid_initial if pfid_initial is not None
+                     else _compute_polarization_fidelity(fixed_dist, ls_p, det_p, lp_token))
+            pnc   = _compute_phase_noise_coefficient(ls_p, lp_token)
+
+            kwargs = dict(
+                runtime=runtime, distance=fixed_dist,
+                polarization_fidelity=pfid, attenuation=att,
+                keysize=keysize, key_num=key_num,
+                ls_params=ls_p, detector_params=det_p,
+                source_type=cfg["source_type"],
+                loss=loss, thermal_params=tp_token,
+                loss_parameters=lp_token,
+                phase_noise_coefficient=pnc, **(extra_kwargs or {}),
+            )
+            tasks.append({"protocol": proto, "sweep_var": label,
+                          "sweep_val": token, "kwargs": kwargs})
+
+    # (reusa o mesmo _worker / _collect_results de sim_variable)
+    total = len(tasks)
+    print(f"[parallel] Launching {total} tasks across {max_workers} workers "
+          f"({len(scenario_points)} {label}s × {len(protocols)} protocols)")
+    results = []
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_worker, t): t for t in tasks}
+        for i, future in enumerate(as_completed(futures), 1):
+            t = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                proto, val = t["protocol"], t["sweep_val"]
+                print(f"\n[parallel] WARNING: {proto} @ {label}={val} failed: {exc}")
+                fb = {"protocol": proto, label: val,
+                      "skr": np.nan, "qber": np.nan, "throughputs": np.nan,
+                      "latency": np.nan, "loss": np.nan, "rs": np.nan}
+                if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
+                    fb["visibility"] = np.nan
+                results.append(fb)
+            print(f"\r[parallel] {i}/{total} done ({i/total*100:.1f}%)",
+                  end="", flush=True)
+    print()
+
+    metrics = _collect_results(label, scenario_points, results, protocols)
+    os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
+    pd.DataFrame(metrics).to_csv(output_csv, index=False)
+    return metrics
+
+
 # -- Backwards-compatible wrappers for the original sweep API
+'''
 def sim_variable_distance(
     runtime, d_step, d_lim, channel_parameters,
     ls_params_cow, ls_params, detector_params, detector_params_cow,
@@ -522,8 +613,16 @@ def sim_variable_keysize(
         loss_parameters=loss_parameters, thermal_params=thermal_params,
         max_workers=max_workers,
     )
- 
- 
+'''
+
+def materialize_hour(hour, *, base_loss_parameters, base_thermal_params, ls_params):
+    lp, tp = materialize(hour, base_loss_params=base_loss_parameters,
+                         base_thermal_params=base_thermal_params,
+                         ls_params=ls_params,
+                         sunrise=6.516667, sunset=17.566667,
+                         height_link_cm=800, link_altitude_m=720+8)
+    return lp, tp, None   # ls_params inalterado 
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Execution driver
 # ═══════════════════════════════════════════════════════════════════════
@@ -553,8 +652,8 @@ def run_simulation():
     friction_velocity = 200   # cm/s
     height_link = 800         # cm
     # Sunset and sunrise on May 11, 2026
-    cn = cn2(time = 12, sunset = 17,566667, sunrise = 6.516667, temperature = temperature, wind_speed = friction_velocity/100, rms_wind_speed=21, relative_humidity = 0.47, height = (720 + height_link/100))
- 
+    cn = cn2(time = 12, sunset = 17.566667, sunrise = 6.516667, temperature = temperature, wind_speed = friction_velocity/100, rms_wind_speed=21, relative_humidity = 0.47, height = (720 + height_link/100))
+
     # -- (distance_m, attenuation_dB/m, polarization_fidelity)
     channel_parameters = (700, 0.0002, None)
  
@@ -619,6 +718,20 @@ def run_simulation():
     #              protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
     # sim_variable("polarization_fidelity", [0.90, 0.93, 0.96, 0.99],
     #              keysize=10_000, **common)
+    
+    sim_scenario(
+        label="hour",
+        scenario_points=[0, 3, 6, 9, 12, 15, 18, 21],
+        runtime=1000,
+        channel_parameters=channel_parameters,
+        ls_params=ls_params, ls_params_cow=ls_params_cow,
+        detector_params=detector_params,
+        detector_params_cow=detector_params_cow,
+        keysize=10_000, key_num=1,
+        base_loss_parameters=loss_parameters,
+        base_thermal_params=thermal_params,
+        materialize_fn=materialize_hour,
+    )
  
     pd.DataFrame({"Total_execution_time_(seconds)":
                   [time.time() - start]}

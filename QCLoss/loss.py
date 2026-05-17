@@ -410,8 +410,7 @@ def polarization_fidelity(distance: float, wavelength: float, w_0: float, receiv
     # -- b parameter (complex). Eq. on p.2 of [1]:
     b = ((1/w_0_m**2) + (1/rho_0_sq) - (1j*k/(2*distance)))
     # --- d coefficient. Below Eq. (14) of [1]:
-    d = (math.pi * photon_number * pulse_duration * math.sqrt(math.pi) / (math.sqrt(2.0)*w_0_m**2)) \ 
-        * ((k/(2*math.pi*distance))**2) * erf(math.sqrt(2.0)*(detection_time - distance / _C_LIGHT) / T_1)
+    d = ((math.pi * photon_number * pulse_duration * math.sqrt(math.pi) / (math.sqrt(2.0)*w_0_m**2)) * ((k/(2*math.pi*distance))**2) * erf(math.sqrt(2.0)*(detection_time - distance / _C_LIGHT) / T_1))
     
     # Eq. (14) of [1]
     exponent = -(a * (k ** 2) * (rho_eval ** 2)) / (4.0 * b * c * (distance ** 2))
@@ -484,12 +483,14 @@ def cn2(time: float, sunset: float, sunrise: float, temperature: float, wind_spe
     elif 13 < th:
         w = 0.13
     # 9ºC <= temperature <= 35ºC, 0 <= wind_speed <= 10 m/s, 14% <= relative_humidity <= 92%
-    if (282.15 <= temperature <= 308,15) and (0 <= wind_speed <= 10) and (0.14 <= relative_humidity <= 0.92):
+    if (282.15 <= temperature <= 308.15) and (0 <= wind_speed <= 10) and (0.14 <= relative_humidity <= 0.92):
         forT = temperature*2*1e-15
         forU = -wind_speed*2.5*1e-15 + (wind_speed**2)*1.2*1e-15 - (wind_speed**3)*8.5*1e-17
         forRH = -(relative_humidity)*2.8*1e-15 + (relative_humidity**2)*2.9*1e-17 - (relative_humidity**3)*1.1*1e-19
         c0 = (w*3.8*1e-14 + forT + forU + forRH -5.3*1e-13)/(15**(-4/3))
-        return (5.96e-3)*((rms_wind_speed/27)**2)*((h*1e-5)**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
+        return (5.96e-3)*((rms_wind_speed/27)**2)*((height*1e-5)**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
+    else: # Outside the validity range of the model.
+        return None
         
 
 def n_value(wavelength: float, temperature: float, salinity: int = 0):
@@ -500,11 +501,11 @@ def n_value(wavelength: float, temperature: float, salinity: int = 0):
     Xiaohong Quan and Edward S. Fry, "Empirical equation for the index of 
      refraction of seawater," Appl. Opt. 34, 3477-3480 (1995) 
     '''
-    T_C = temperature_K - 273.15 
-    lam = wavelength_nm
+    T_C = temperature - 273.15 
+    lam = wavelength
     S = salinity
-    n = 1.31405 + (1.779e-4 - 1.05e-6*T_C + 1.6e-8*T_C**2)*S - 2.02e6*T_C + (15.868 + 0.01155*S - 0.00423*T_C)/lem - 4382/lem**2 + 1.1455e6/lem**3
-    return s
+    n = 1.31405 + (1.779e-4 - 1.05e-6*T_C + 1.6e-8*T_C**2)*S - 2.02e-6*T_C + (15.868 + 0.01155*S - 0.00423*T_C)/lam - 4382/lam**2 + 1.1455e6/lam**3
+    return n
 
 
 def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
@@ -565,16 +566,14 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     # Using Kim's model for the dispersion parameter (referência 4)
     if v_range > 50:
         delta = 1.6
-    elif 50 > v_range > 6:
+    elif 50 >= v_range > 6:
         delta = 1.3
-    elif 6 > v_range > 1:
+    elif 6 >= v_range > 1:
         delta = 0.34 + 0.16*v_range
-    elif 1 > v_range > 0.5:
+    elif 1 >= v_range > 0.5:
         delta = v_range - 0.5
-    elif v_range < 0.5:
+    elif v_range <= 0.5:
         delta = 0
-    else:
-        delta = None # v_range is outside the allowed range or has inconsistent values.
     beta_fog = (3.91/v_range)*((wavelength/550)**(-delta))
     eta_fog = math.exp(-distance*(beta_fog)*1e-3)
     
@@ -594,7 +593,7 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
     eta_turb = 1 - math.exp(-(2*(receiver_radius*0.01)**2)/(w_lt2))
 
     # Rain attenuation (referência 1, 3 e 6)
-    if Q_scat == None:
+    if Q_scat is None:
         m_water = n_value(wavelength, temperature) + 0j
         Q_scat, _, _, _ = miepython.efficiencies_mx(m_water, (2*math.pi*size_raindrop/wavelength*1e-7))
     limit_s_precipitation = (2*(size_raindrop**2)*density*gravitation)/(9*viscosity)# Velocidade limite de precipitação

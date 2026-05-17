@@ -184,14 +184,16 @@ class QuantumChannel(OpticalChannel):
             # Two photons emitted within tau_atm pick up nearly identical
             # pistons, which cancel in Bob's Michelson interferometer
             # (the physically correct behaviour).
+            phi = 0.0
             if self.atmospheric_phase_process is not None:
-                qubit.channel_phase = self.atmospheric_phase_process.sample(self.timeline.now())
+                phi += self.atmospheric_phase_process.sample(self.timeline.now())
 
             # Optional: superimpose laser-linewidth Wiener noise, which IS
             # independent per photon.  Add the two in quadrature.
             if self.phase_noise_coefficient > 0 and self.distance > 0:
                 sigma_phi = self.phase_noise_coefficient * math.sqrt(self.distance)
-                qubit.channel_phase = float(rng.normal(0.0, sigma_phi))
+                phi += float(rng.normal(0.0, sigma_phi))
+            qubit.channel_phase = phi
 
 
 
@@ -343,7 +345,7 @@ class EveQuantumChannel(QuantumChannel):
     """
 
     def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
-        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, 
+        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, phase_noise_coefficient_seg2: "float | None" = None,
         loss: "float | None" = None, atmospheric_phase_process: "Optional[AtmosphericPhaseProcess]" = None, atmospheric_phase_process_seg2: "Optional[AtmosphericPhaseProcess]" = None) -> None:
         """
         Args:
@@ -374,6 +376,7 @@ class EveQuantumChannel(QuantumChannel):
         self._total_distance: float = distance
         self._seg2: Optional[QuantumChannel] = None   # criado em init()
         self._atm_proc_seg2 = atmospheric_phase_process_seg2
+        self._phase_noise_coef_seg2 = (phase_noise_coefficient if phase_noise_coefficient_seg2 is None else phase_noise_coefficient_seg2)
 
     # ── QuantumChannel interface ──────────────────────────────────────────
 
@@ -408,7 +411,7 @@ class EveQuantumChannel(QuantumChannel):
             polarization_fidelity=self.polarization_fidelity,
             light_speed=self.light_speed,
             frequency=self.frequency,
-            phase_noise_coefficient=self.phase_noise_coefficient,
+            phase_noise_coefficient=self._phase_noise_coef_seg2,
             loss=self._loss_spec, atmospheric_phase_process=self._atm_proc_seg2,
         )
         # Registra _seg2 em Eve com a chave 'bob'.
