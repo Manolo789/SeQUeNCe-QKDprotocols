@@ -40,7 +40,6 @@ import miepython
 import math
 import cmath
 from scipy.special import erf
-from scipy.integrate import quad
 import numpy as np
 
 _C_LIGHT = 2.99792458e8
@@ -63,7 +62,7 @@ def outer_scale(friction_velocity: float, height: float):
     #    onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
     return ((friction_velocity**3)/(0.4*height))**(1/2)
     
-def inner_scale(temperature: float, pressure: float, friction_velocity: float, height: float, viscosity: float = None):
+def inner_scale(temperature: float, pressure: float, friction_velocity: float, height: float, viscosity: float):
     '''
     Calculation of the internal scale parameter in Kolmogorov turbulence theory
 
@@ -78,13 +77,6 @@ def inner_scale(temperature: float, pressure: float, friction_velocity: float, h
         height: Altura acima do solo [cm]
         viscosity: Viscosidade do ar [(g/cm)s]
     '''
-    # Cálculo da Viscosidade Dinâmica: Equação de Sutherland (mu = mu_0*((T_0+S)/(T+S))*(T/T_0)**(3/2)) 
-    # mu_0 = 1.716*1e-5 Kg * m^-1 * s^-1
-    # T_0 = 273.15 K
-    # S = 110.4 K
-    if viscosity == None:
-        viscosity = 1.716*1e-4*((273.15+110.4)/(temperature+110.4))*(temperature/273.15)**(3/2)
-
     # l0_parameter = C_Tatarskii*(ν³/ε)**(1/4)    (referência 7)
     # C_Tatarskii: A constante de Tatarskii relaciona l0_parameter à microescala de Kolmogorov
     # ν: viscosidade cinemática (ν = viscosidade_dinâmica/densidade_do_ar)
@@ -414,8 +406,10 @@ def polarization_fidelity(distance: float, wavelength: float, w_0: float, receiv
     
     # Eq. (14) of [1]
     exponent = -(a * (k ** 2) * (rho_eval ** 2)) / (4.0 * b * c * (distance ** 2))
-    exp_term = cmath.exp(exponent)
-    ratio = (d * exp_term)/(2.0 * c + (d * exp_term))
+
+    # ratio = (d * exp_term)/(2.0 * c + (d * exp_term)) = 1/(1 + ((2*c)/d)*exp_term) where exp_term = exp(-p)
+    exp_term = cmath.exp(-exponent)
+    ratio = 1/(1 + ((2*c)/d)*exp_term)
     degree_p = max(0.0, min(1.0, abs(cmath.sqrt(ratio))))
     
     # -- Reference [2]
@@ -560,7 +554,13 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         gravitation = 980: Aceleração da gravidade [cm/s²]
     '''
     wavelength_m = wavelength * 1e-9 # nm to m
-    l0_parameter = inner_scale(temperature, pressure, friction_velocity, height)
+    # Cálculo da Viscosidade Dinâmica: Equação de Sutherland (mu = mu_0*((T_0+S)/(T+S))*(T/T_0)**(3/2)) 
+    # mu_0 = 1.716*1e-5 Kg * m^-1 * s^-1
+    # T_0 = 273.15 K
+    # S = 110.4 K
+    if viscosity == None:
+        viscosity = 1.716*1e-4*((273.15+110.4)/(temperature+110.4))*(temperature/273.15)**(3/2)
+    l0_parameter = inner_scale(temperature, pressure, friction_velocity, height, viscosity)
 
     # Fog Attenuation (referência 1)
     # Using Kim's model for the dispersion parameter (referência 4)

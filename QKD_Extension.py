@@ -8,11 +8,8 @@ from functools import partial
 import numpy as np
 import pandas as pd
 
-from sequence.components.optical_channel import (QuantumChannel,
-                                                  ClassicalChannel,
-                                                  EveQuantumChannel)
-from sequence.components.thermal_noise_source import (ThermalNoiseSource,
-                                                       compute_n_B, _c)
+from sequence.components.optical_channel import QuantumChannel, ClassicalChannel, EveQuantumChannel
+from sequence.components.thermal_noise_source import ThermalNoiseSource, compute_n_B, _c
 from sequence.kernel.event import Event
 from sequence.kernel.process import Process
 from sequence.kernel.timeline import Timeline
@@ -23,9 +20,7 @@ from sequence.topology.node import QKDNode, EveNode
 from sequence.utils.encoding_cow import time_bin_cow
 import sequence.utils.log as log
 
-from QCLoss.loss import (channel_FSO_loss, cn2, polarization_fidelity,
-                         phase_noise, make_atmospheric_phase_process,
-                         wind_speed_perp)
+from QCLoss.loss import channel_FSO_loss, cn2, polarization_fidelity, phase_noise, make_atmospheric_phase_process, wind_speed_perp
 from scenarios import materialize
 
 
@@ -33,33 +28,27 @@ from scenarios import materialize
 #  Protocol registry — every per-protocol difference lives here
 # ═══════════════════════════════════════════════════════════════════════
 PROTOCOL_REGISTRY = {
-    "BB84": dict(
-        qkdtype=0, pair_fn=pair_bb84_protocols, encoding=None,
+    "BB84": dict(qkdtype=0, pair_fn=pair_bb84_protocols, encoding=None,
         log_module="BB84", has_eve=False, needs_visibility=False,
         ls_key="ls_params", det_key="detector_params", source_type="sps",
     ),
-    "B92": dict(
-        qkdtype=1, pair_fn=pair_b92_protocols, encoding=None,
+    "B92": dict(qkdtype=1, pair_fn=pair_b92_protocols, encoding=None,
         log_module="B92", has_eve=False, needs_visibility=False,
         ls_key="ls_params", det_key="detector_params", source_type="sps",
     ),
-    "COW": dict(
-        qkdtype=2, pair_fn=pair_cow_protocols, encoding=time_bin_cow,
+    "COW": dict(qkdtype=2, pair_fn=pair_cow_protocols, encoding=time_bin_cow,
         log_module="COW", has_eve=False, needs_visibility=True,
         ls_key="ls_params_cow", det_key="detector_params_cow", source_type="wcp",
     ),
-    "BB84+Eve": dict(
-        qkdtype=0, pair_fn=pair_bb84_protocols, encoding=None,
+    "BB84+Eve": dict(qkdtype=0, pair_fn=pair_bb84_protocols, encoding=None,
         log_module="BB84", has_eve=True, needs_visibility=False,
         ls_key="ls_params", det_key="detector_params", source_type="sps",
     ),
-    "B92+Eve": dict(
-        qkdtype=1, pair_fn=pair_b92_protocols, encoding=None,
+    "B92+Eve": dict(qkdtype=1, pair_fn=pair_b92_protocols, encoding=None,
         log_module="B92", has_eve=True, needs_visibility=False,
         ls_key="ls_params", det_key="detector_params", source_type="sps",
     ),
-    "COW+Eve": dict(
-        qkdtype=2, pair_fn=pair_cow_protocols, encoding=time_bin_cow,
+    "COW+Eve": dict(qkdtype=2, pair_fn=pair_cow_protocols, encoding=time_bin_cow,
         log_module="COW", has_eve=True, needs_visibility=True,
         ls_key="ls_params_cow", det_key="detector_params_cow", source_type="wcp",
     ),
@@ -101,8 +90,7 @@ def _safe_mean(lst, default=np.nan):
 def _collect_metrics(protocol):
     """Generic metrics: QBER, throughput, latency, SKR, loss, R_s."""
     qber_list = protocol.error_rates
-    throughputs = (np.mean(protocol.throughputs)
-                   if len(protocol.throughputs) > 0 else 0.0)
+    throughputs = (np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0)
     latency = protocol.latency
 
     if not qber_list or protocol.send_bits_length == 0:
@@ -113,15 +101,13 @@ def _collect_metrics(protocol):
         rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
         skr_sum += max(0.0, rs * (1 - 2 * binary_entropy(e)))
         rs_list.append(rs)
-    return (qber_list, throughputs, latency,
-            skr_sum / len(qber_list), float(np.mean(rs_list)))
+    return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
 
 def _collect_cow_metrics(protocol, visibility, ls_params, loss):
     """COW metrics with visibility-adjusted SKR (DOI 10.1063/1.2126792)."""
     qber_list = protocol.error_rates
-    throughputs = (np.mean(protocol.throughputs)
-                   if len(protocol.throughputs) > 0 else 0.0)
+    throughputs = (np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0)
     latency = protocol.latency
 
     if not qber_list or protocol.send_bits_length == 0:
@@ -137,8 +123,7 @@ def _collect_cow_metrics(protocol, visibility, ls_params, loss):
         eve_info = r + ((1 - v) * (1 + math.exp(-mu * t)) / (2 * math.exp(-mu * t)))
         skr_sum += max(0.0, rs * (1 - binary_entropy(e) - eve_info))
         rs_list.append(rs)
-    return (qber_list, throughputs, latency,
-            skr_sum / len(qber_list), float(np.mean(rs_list)))
+    return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
 
 def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
@@ -151,12 +136,8 @@ def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
         a_R_cm=thermal_params["a_R_cm"],
         B_sky=thermal_params["B_sky"],
     )
-    encoding = (detector.owner.encoding
-                if hasattr(detector.owner, "encoding") else None)
-    src = ThermalNoiseSource(
-        name=f"thermal_{detector.name}", timeline=tl, n_B=n_B,
-        frequency=ls_params["frequency"], encoding_type=encoding,
-    )
+    encoding = detector.owner.encoding if hasattr(detector.owner, "encoding") else None
+    src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
     src.add_receiver(detector)
     tl.entities[src.name] = src
     return src
@@ -165,8 +146,7 @@ def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
 # ═══════════════════════════════════════════════════════════════════════
 #  Building blocks for the simulation runner
 # ═══════════════════════════════════════════════════════════════════════
-def _setup_atm_processes(is_cow, has_eve, loss_parameters, ls_params,
-                         distance, eve_position, stop_time_ps):
+def _setup_atm_processes(is_cow, has_eve, loss_parameters, ls_params, distance, eve_position, stop_time_ps):
     """Pre-generate atmospheric piston processes for one simulation run.
 
     Returns:
@@ -181,17 +161,11 @@ def _setup_atm_processes(is_cow, has_eve, loss_parameters, ls_params,
     if has_eve:
         d1 = distance * eve_position
         d2 = distance * (1.0 - eve_position)
-        atm_ab = make_atmospheric_phase_process(
-            distance=d1, timeline_stop_time_ps=stop_time_ps,
-            ls_params=ls_params, loss_parameters=loss_parameters, seed=3)
-        atm_eb = make_atmospheric_phase_process(
-            distance=d2, timeline_stop_time_ps=stop_time_ps,
-            ls_params=ls_params, loss_parameters=loss_parameters, seed=4)
+        atm_ab = make_atmospheric_phase_process(distance=d1, timeline_stop_time_ps=stop_time_ps, ls_params=ls_params, loss_parameters=loss_parameters, seed=3)
+        atm_eb = make_atmospheric_phase_process(distance=d2, timeline_stop_time_ps=stop_time_ps, ls_params=ls_params, loss_parameters=loss_parameters, seed=4)
         return atm_ab, atm_eb
 
-    atm_ab = make_atmospheric_phase_process(
-        distance=distance, timeline_stop_time_ps=stop_time_ps,
-        ls_params=ls_params, loss_parameters=loss_parameters, seed=3)
+    atm_ab = make_atmospheric_phase_process(distance=distance, timeline_stop_time_ps=stop_time_ps, ls_params=ls_params, loss_parameters=loss_parameters, seed=3)
     return atm_ab, None
 
 
@@ -218,8 +192,7 @@ def _make_qchannels(tl, cfg, distance, attenuation, polarization_fidelity,
         if cfg["encoding"] is not None:
             eve_kwargs["encoding"] = cfg["encoding"]
         eve = EveNode("eve", tl, **eve_kwargs)
-        qc0 = EveQuantumChannel(
-            "qc0", tl, eve_node=eve, eve_position=eve_position,
+        qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, eve_position=eve_position,
             atmospheric_phase_process_seg2=atm_eb,
             phase_noise_coefficient_seg2=phase_noise_coefficient,
             **qc_kwargs,
@@ -270,17 +243,10 @@ def run_qkd_simulation(
         log.track_module("light_source")
 
     # Atmospheric piston pre-generation (only meaningful for COW).
-    atm_ab, atm_eb = _setup_atm_processes(
-        is_cow, cfg["has_eve"], loss_parameters, ls_params,
-        distance, eve_position, tl.stop_time,
-    )
+    atm_ab, atm_eb = _setup_atm_processes(is_cow, cfg["has_eve"], loss_parameters, ls_params, distance, eve_position, tl.stop_time)
 
     # Quantum channels (qc0 carries Eve when applicable).
-    qc0, qc1 = _make_qchannels(
-        tl, cfg, distance, attenuation, polarization_fidelity,
-        loss, atm_ab, atm_eb, phase_noise_coefficient,
-        eve_intercept_rate, eve_position,
-    )
+    qc0, qc1 = _make_qchannels(tl, cfg, distance, attenuation, polarization_fidelity, loss, atm_ab, atm_eb, phase_noise_coefficient, eve_intercept_rate, eve_position)
 
     # Classical channels.
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
@@ -327,19 +293,16 @@ def run_qkd_simulation(
         vis = proto_obj.visibility
         qber, th, lat, skr, rs = _collect_cow_metrics(
             proto_obj, vis, ls_params, loss)
-        return dict(qber=qber, throughputs=th, latency=lat, skr=skr,
-                    loss=loss, rs=rs, visibility=vis)
+        return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs, visibility=vis)
     qber, th, lat, skr, rs = _collect_metrics(proto_obj)
-    return dict(qber=qber, throughputs=th, latency=lat, skr=skr,
-                loss=loss, rs=rs)
+    return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Backwards-compatible thin wrappers (preserve original tuple API)
 # ═══════════════════════════════════════════════════════════════════════
 def _unpack(res):
-    base = (res["qber"], res["throughputs"], res["latency"],
-            res["skr"], res["loss"], res["rs"])
+    base = (res["qber"], res["throughputs"], res["latency"], res["skr"], res["loss"], res["rs"])
     return base + (res["visibility"],) if "visibility" in res else base
 
 
@@ -356,13 +319,12 @@ def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", 
 # ═══════════════════════════════════════════════════════════════════════
 def _compute_loss(distance, ls_params, loss_parameters):
     """Forward the entire `loss_parameters` dict to channel_FSO_loss."""
-    return channel_FSO_loss(distance=distance,
-                            wavelength=ls_params["wavelength"],
-                            **loss_parameters)
+    l_p = loss_parameters.copy()
+    del l_p["wind_speed_perp"]
+    return channel_FSO_loss(distance=distance, wavelength=ls_params["wavelength"], **l_p)
 
 
-def _compute_polarization_fidelity(distance, ls_params, detector_params,
-                                   loss_parameters):
+def _compute_polarization_fidelity(distance, ls_params, detector_params, loss_parameters):
     """Compute the polarization fidelity for the given (distance, atmospheric)
     configuration. `detector_params` is the list-of-dicts used elsewhere;
     the count_rate of the first detector defines the detection window."""
@@ -718,8 +680,7 @@ def run_simulation():
         "C_n2":               cn,                # computed above
         "R_0":                math.inf,          # For collimated beams, R_0 = math.inf is adopted
         "friction_velocity":  friction_velocity, # labmicro.iag.usp.br/Data/data_PMIAG.html
-        "wind_speed_perp":    wind_speed_perp(link_altitude_m,
-                                              friction_velocity / 100),
+        "wind_speed_perp":    wind_speed_perp(link_altitude_m, friction_velocity / 100),
         "height":             height_link,       # transmitter/receiver mid-height
         "size_raindrop":      0.1,               # FADHIL, H. A. et al. Optimization of free space optics parameters: An optimum solution for bad weather conditions. v. 124, n. 19, p. 3969–3973, 1 out. 2013.
         "viscosity":          None,              # Sutherland, W. (1893), "The viscosity of gases and molecular force", Philosophical Magazine, S. 5, 36, pp. 507-531 (1893)
@@ -760,14 +721,14 @@ def run_simulation():
     )
 
     # -- Sweep #1: distance
-    sim_variable("distance", range(1000, 100001, 1000),
-                 keysize=10000, **common)
+    #sim_variable("distance", range(1000, 100001, 1000),
+    #             keysize=10000, **common)
 
     # -- Sweep #2: keysize
-    sim_variable("keysize",
-                 [20, 45, 50, 100, 200, 400, 800, 1600,
-                  5000, 20000, 40000, 80000, 100000],
-                 **common)
+    #sim_variable("keysize",
+    #             [20, 45, 50, 100, 200, 400, 800, 1600,
+    #              5000, 20000, 40000, 80000, 100000],
+    #             **common)
 
     # -- Adding a new sweep is a one-liner. Examples:
     # sim_variable("attenuation", [1e-4, 2e-4, 4e-4, 8e-4],
