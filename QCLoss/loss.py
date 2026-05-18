@@ -336,8 +336,8 @@ def make_atmospheric_phase_process(distance: float, timeline_stop_time_ps: float
         seed           = seed,
     )
 
-def polarization_fidelity(distance: float, wavelength: float, w_0: float, receiver_radius: float, photon_number: float, 
-    pulse_duration: float, detection_time: float, friction_velocity: float, height: float, C_n2: float, rho_eval: float = None):
+def polarization_fidelity(distance: float, wavelength: float, w_0: float, photon_number: float, pulse_duration: float, 
+    detection_time: float, friction_velocity: float, height: float, C_n2: float, rho_eval: float = 0):
     '''
     Calculation of polarization fidelity (degree of polarization of a 
      Gaussian pulse beam) considering atmospheric turbulence effects.
@@ -359,36 +359,30 @@ def polarization_fidelity(distance: float, wavelength: float, w_0: float, receiv
         distance: Largura do canal [m]
         wavelength: Comprimento de onda [nm]
         w_0: Raio inicial do feixe gaussiano (característica do emissor) [cm]
-        receiver_radius: Raio da abertura do receptor [cm]
         photon_number: Número médio de fótons na duração do pulso n_0.
                         Default 1 (single-photon source). Para fontes WCP,
                         use o `mean_photon_num` de `ls_params`.
         pulse_duration: Duração do pulso na fonte T_0 [s]. 
                          Para fontes CW, use T_0 = 1 / frequency.
-        detection_time: Janela temporal de detecção T [s]. Para detector com tempo morto
-                         fixo, use 1 / count_rate.
+        detection_time: Janela temporal de detecção T [s].
         friction_velocity: Velocidade de atrito [cm/s]
         height: Altura acima do solo [cm]
         C_n2: Constante de estrutura do índice de refração
                [m^(-2/3)] -- normalmente já calculada com a função
                `cn2(...)` do seu loss.py.
         rho_eval: Coordenada transversal de avaliação rho [m].
-                   Default = receiver_radius / 2 (compromisso entre o
-                   eixo e a borda da abertura). Use rho_eval = 0 para
+                   Default: Use rho_eval = 0 para
                    a fidelidade no eixo (limite superior).
     '''
     # Unit conversions (cm -> m and nm -> m) to keep formulas SI-consistent.
     wavelength_m = wavelength * 1e-9
     w_0_m = w_0 * 1e-2
-    receiver_radius_m = receiver_radius * 1e-2
     k = 2.0 * math.pi / wavelength_m
     L_0 = outer_scale(friction_velocity, height)
     
     # -- rho_0^2 (Below Eq. 8 of [1]) ---
     # C_n^2 is constant throughout the integration interval due to the fact that it is a horizontal ground-to-ground link.
     rho_0_sq = (1/((1.45*(3/8)*distance*C_n2*k**2)**(6/5)))*(1/(1-0.715*((2*math.pi)/L_0)**(1/3)))
-    if rho_eval is None:
-        rho_eval = 2*receiver_radius_m
     
     # -- T_1 (Below Eq. 10 of [1]) ---
     # Horizontal link with constant C_n^2 -> INTEGRAL = C_n^2 * z.
@@ -404,7 +398,7 @@ def polarization_fidelity(distance: float, wavelength: float, w_0: float, receiv
     b = ((1/w_0_m**2) + (1/rho_0_sq) - (1j*k/(2*distance)))
     # --- d coefficient. Below Eq. (14) of [1]:
     d = ((math.pi * photon_number * pulse_duration * math.sqrt(math.pi) / (math.sqrt(2.0)*w_0_m**2)) * ((k/(2*math.pi*distance))**2) * erf(math.sqrt(2.0)*(detection_time - distance / _C_LIGHT) / T_1))
-    
+
     # Eq. (14) of [1]
     exponent = -(a * (k ** 2) * (rho_eval ** 2)) / (4.0 * b * c * (distance ** 2))
 

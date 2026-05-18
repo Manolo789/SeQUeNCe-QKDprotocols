@@ -241,12 +241,9 @@ class QuantumChannel(OpticalChannel):
 
             if qubit.is_null:
                 qubit.add_loss(self.loss)
-                
-            
 
             # ── Apply channel noise (polarization OR phase decoherence) ──
             self._apply_channel_noise(qubit)
-
 
             # schedule receiving node to receive photon at future time determined by light speed
             future_time = self.timeline.now() + self.delay
