@@ -50,7 +50,7 @@ def outer_scale(friction_velocity: float, height: float):
 
     Based on the results of the article:
     [1] ANDREWS, L. C.; PHILLIPS, R. L. Laser Beam Propagation Through Random Media.
-     SPIE-International Society for Optical Engineering, 2005. p. 61
+     SPIE-International Society for Optical Engineering, 2005. p. 483
 
     Attributes:
         friction_velocity: Velocidade de atrito [cm/s]
@@ -60,7 +60,8 @@ def outer_scale(friction_velocity: float, height: float):
     # ε: taxa de dissipação de energia turbulenta. A partir da velocidade do vento e da altura, 
     #    usando a teoria da camada limite atmosférica: ε ≈ velocidade_de_atrito³/(κ*h),
     #    onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
-    return ((friction_velocity**3)/(0.4*height))**(1/2)
+    # return ((friction_velocity**3)/(0.4*height))**(1/2)
+    return 0.4*(height/100)
     
 def inner_scale(temperature: float, pressure: float, friction_velocity: float, height: float, viscosity: float):
     '''
