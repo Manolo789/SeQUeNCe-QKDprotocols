@@ -8,50 +8,11 @@ them into the loss-parameter and thermal-noise dicts consumed by
 
 import math
 from QCLoss.loss import cn2, wind_speed_perp
+import pandas as pd
+from datetime import datetime
 
-
-def diurnal_profile(hour: float) -> dict:
-    """Return atmospheric parameters for a given hour of the day.
-
-    Args:
-        hour (float): local time in fractional hours (0..24).
-
-    Returns:
-        dict with keys:
-            - temperature       [K]
-            - pressure          [mbar]
-            - wind_speed        [m/s]
-            - friction_velocity [cm/s]
-            - relative_humidity [fraction, 0..1]
-            - rms_wind_speed    [m/s]
-            - precipitation_rate
-            - hour              (echoed back for traceability)
-
-    Notes:
-        This is a placeholder analytical model -- replace by measured
-        data (e.g. a CSV from a local weather station) for production
-        simulations. The shape of the curves (minimum near 6h, maximum
-        near 15h, etc.) is intentionally simple and meant for sanity
-        checks of the simulator pipeline, not for quantitative claims.
-    """
-    # Temperatura: mínima ~6h, máxima ~15h
-    T = 296.0 + 6.0 * math.sin(2 * math.pi * (hour - 9) / 24)        # K
-    # Pressão varia pouco ao longo do dia
-    P = 927 + 2 * math.sin(2 * math.pi * hour / 24)                  # mbar
-    # Vento mais forte de tarde
-    u = 1.5 + 1.0 * math.sin(2 * math.pi * (hour - 13) / 24)         # m/s
-    u_star = max(10.0, u * 100 * 0.1)                                # cm/s
-    RH = 0.65 - 0.25 * math.sin(2 * math.pi * (hour - 15) / 24)      # fração
-    rms = max(10.0, u * 1.5)                                         # m/s
-
-    return dict(temperature=T, pressure=P, wind_speed=u,
-                friction_velocity=u_star, relative_humidity=RH,
-                rms_wind_speed=rms, precipitation_rate=0.0,
-                hour=hour)
-
-
-def materialize(hour, *, base_loss_parameters, base_thermal_params,
-                ls_params, sunrise, sunset, link_altitude_m):
+def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
+                ls_params, sunrise, sunset, link_altitude_m, date, dataframe):
     """Build (loss_parameters, thermal_params, ls_overrides) for one hour.
 
     The return shape (3-tuple) is the exact contract expected by
@@ -62,7 +23,7 @@ def materialize(hour, *, base_loss_parameters, base_thermal_params,
     it should return a dict here.
 
     Args:
-        hour (float): local time in fractional hours (0..24).
+        hour (float): local time in fractional hours (0..23). Example: hour=13,515 (13:30:54)
         base_loss_parameters (dict): base loss-parameter dict. Only the
             atmospheric quantities are overwritten by the hourly profile;
             everything else (geometry, source aperture, raindrop size,
@@ -78,22 +39,47 @@ def materialize(hour, *, base_loss_parameters, base_thermal_params,
     Returns:
         tuple: (loss_parameters, thermal_params, ls_overrides).
     """
-    prof = diurnal_profile(hour)
+    
+    horas = int(hour)
+    resto_minutos = (hour - horas) * 60
+    minutos = int(resto_minutos)
+    segundos = round((resto_minutos - minutos) * 60)
 
-    cn = cn2(time=prof["hour"], sunset=sunset, sunrise=sunrise,
-             temperature=prof["temperature"],
-             wind_speed=prof["wind_speed"],
-             rms_wind_speed=prof["rms_wind_speed"],
-             relative_humidity=prof["relative_humidity"],
+    # Ajuste caso o arredondamento dos segundos ou minutos chegue a 60
+    if segundos == 60:
+        segundos = 0
+        minutos += 1
+    if minutos == 60:
+        minutos = 0
+        horas += 1
+    
+    date = datetime.strptime(date+" "+str(horas)+":"+str(minutos)+":"+str(segundos), "%Y-%m-%d %H:%M:%S")
+    correspondencias = dataframe.index[dataframe[0] == date]
+    index = correspondencias[0] if len(correspondencias) > 0 else None
+    
+    T = float(dataframe[4][index]) + 273.15
+    P = float(dataframe[3][index])
+    u = float(dataframe[7][index])
+    u_star = u * 100
+    RH = float(dataframe[5][index]) / 100
+    rms = 21
+    p_rate = ((float(dataframe[6][index]))/60)/10  # Passo temporal: 1 minuto. Logo, se há X mm Chuva_Tot em 60 s,
+                                                       # então a taxa de precipitação neste instante é X/60 mm/s.
+                                                       # ([mm]/60)*10 = [cm/s]
+    print(T, P, u, u_star, RH, rms, p_rate)
+    cn = cn2(time=hour, sunset=sunset, sunrise=sunrise,
+             temperature=T,
+             wind_speed=u,
+             rms_wind_speed=rms,
+             relative_humidity=RH,
              height=link_altitude_m)
 
     lp = {**base_loss_parameters,
-          "temperature":        prof["temperature"],
-          "pressure":           prof["pressure"],
-          "friction_velocity":  prof["friction_velocity"],
-          "wind_speed_perp":    wind_speed_perp(link_altitude_m,
-                                                prof["wind_speed"]),
-          "precipitation_rate": prof["precipitation_rate"],
+          "temperature":        T,
+          "pressure":           P,
+          "friction_velocity":  u_star,
+          "wind_speed_perp":    wind_speed_perp(link_altitude_m, u),
+          "precipitation_rate": p_rate,
           "C_n2":               cn}
 
     # B_sky changes by ~4 orders of magnitude between night and day.

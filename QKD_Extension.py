@@ -21,7 +21,7 @@ from sequence.utils.encoding_cow import time_bin_cow
 import sequence.utils.log as log
 
 from QCLoss.loss import channel_FSO_loss, cn2, polarization_fidelity, phase_noise, make_atmospheric_phase_process, wind_speed_perp
-from scenarios import materialize
+from scenarios import diurnal_profile
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -570,15 +570,15 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
 def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
                  ls_params, ls_params_cow, detector_params, detector_params_cow,
                  keysize, key_num, base_loss_parameters, base_thermal_params,
-                 materialize_fn, protocols=None, output_csv=None,
+                 diurnal_profile_fn, protocols=None, output_csv=None,
                  max_workers=None, extra_kwargs=None):
     """Parallel sweep where each point materialises a full parameter set.
 
     Args:
         label: name of the independent variable for the output CSV
             (e.g. 'hour').
-        scenario_points: list of opaque tokens passed to materialize_fn.
-        materialize_fn: callable
+        scenario_points: list of opaque tokens passed to diurnal_profile_fn.
+        diurnal_profile_fn: callable
             (token, *, base_loss_parameters, base_thermal_params, ls_params)
             -> (loss_parameters, thermal_params, ls_overrides).
             ``ls_overrides`` can be None when the light-source params are
@@ -599,7 +599,7 @@ def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
                   "detector_params_cow": detector_params_cow}
 
     def point_to_spec(token):
-        lp, tp, ls_overrides = materialize_fn(
+        lp, tp, ls_overrides = diurnal_profile_fn(
             token,
             base_loss_parameters=base_loss_parameters,
             base_thermal_params=base_thermal_params,
@@ -652,7 +652,7 @@ def run_simulation():
     detector_params_cow = [dict(det_template) for _ in range(3)]
 
     # -- Atmospheric / site parameters (base values; per-hour overrides
-    #    come from materialize() in scenarios.py)
+    #    come from diurnal_profile() in scenarios.py)
     temperature       = 298.15   # Kelvin
     friction_velocity = 200      # cm/s
     height_link       = 800      # cm
@@ -740,12 +740,14 @@ def run_simulation():
     # Bind site-specific parameters (sunrise/sunset/altitude) once via
     # functools.partial, leaving only the (token, base_loss_parameters,
     # base_thermal_params, ls_params) signature that sim_scenario expects.
-    mat_fn = partial(materialize, sunrise=sunrise, sunset=sunset,
-                     link_altitude_m=link_altitude_m)
+    df = pd.read_csv("sensores/estação-solar-usp_Tabela01.dat", sep=',', skiprows=4, header=None, decimal='.', low_memory=False)
+    df[0] = pd.to_datetime(df[0], format="%Y-%m-%d %H:%M:%S")
+    diurnp_fn = partial(diurnal_profile, sunrise=sunrise, sunset=sunset,
+                     link_altitude_m=link_altitude_m, date="2015-02-04", dataframe=df)
 
     sim_scenario(
         label="hour",
-        scenario_points=[0, 3, 6, 9, 12, 15, 18, 21],
+        scenario_points=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
         runtime=1000,
         channel_parameters=channel_parameters,
         ls_params=ls_params, ls_params_cow=ls_params_cow,
@@ -754,7 +756,7 @@ def run_simulation():
         keysize=10_000, key_num=1,
         base_loss_parameters=loss_parameters,
         base_thermal_params=thermal_params,
-        materialize_fn=mat_fn,
+        diurnal_profile_fn=diurnp_fn,
     )
 
     pd.DataFrame({"Total_execution_time_(seconds)":

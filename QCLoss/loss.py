@@ -39,29 +39,39 @@ from typing import Optional
 import miepython
 import math
 import cmath
-from scipy.special import erf
+from scipy.special import gamma, gammaincc
+from scipy.sparse import diags, identity, kron
 import numpy as np
 
 _C_LIGHT = 2.99792458e8
 
-def outer_scale(friction_velocity: float, height: float):
+
+
+def outer_scale(height: float):
     '''
     Calculation of the external scale parameter in Kolmogorov turbulence theory
 
     Based on the results of the article:
     [1] ANDREWS, L. C.; PHILLIPS, R. L. Laser Beam Propagation Through Random Media.
      SPIE-International Society for Optical Engineering, 2005. p. 483
+     
+    [2] LUKIN, V. P. Outer scale of atmospheric turbulence. SPIE Proceedings, 
+     v. 5981, p. 598101, 6 out. 2005.
 
     Attributes:
-        friction_velocity: Velocidade de atrito [cm/s]
         height: Altura acima do solo [cm]
     '''
-    # L_0 is proportional to ε**(1/2)
-    # ε: taxa de dissipação de energia turbulenta. A partir da velocidade do vento e da altura, 
-    #    usando a teoria da camada limite atmosférica: ε ≈ velocidade_de_atrito³/(κ*h),
-    #    onde κ é a constante de von Kármán (κ ≈ 0.4) e h é a altura acima do solo.
-    # return ((friction_velocity**3)/(0.4*height))**(1/2)
-    return 0.4*(height/100)
+
+    height_m = height * 1e-2
+    
+    if height_m <= 1:
+        return 0.4
+    elif 1 < height_m <= 25:
+        return 0.4*height_m
+    elif 25 < height_m <= 1000:
+        return 2*math.sqrt(height_m)
+    elif 1000 < height_m:
+        return 2*math.sqrt(1000)
     
 def inner_scale(temperature: float, pressure: float, friction_velocity: float, height: float, viscosity: float):
     '''
@@ -108,7 +118,7 @@ def phase_noise(wavelength: float, C_n2: float, friction_velocity: float, height
     # Unit conversions (cm -> m and nm -> m) to keep formulas SI-consistent.
     wavelength_m = wavelength * 1e-9
     k = 2.0 * math.pi / wavelength_m
-    K0 = (2*math.pi)/outer_scale(friction_velocity, height)
+    K0 = (2*math.pi)/outer_scale(height)
     
     return math.sqrt(0.78 * C_n2 * (k**2) * (K0**(-5/3)))
     
@@ -314,7 +324,7 @@ def make_atmospheric_phase_process(distance: float, timeline_stop_time_ps: float
                           frequency of the PSD), capped at 1 ms.
     """
  
-    L_0     = outer_scale(loss_parameters["friction_velocity"], loss_parameters["height"])
+    L_0     = outer_scale(loss_parameters["height"])
     V_perp  = loss_parameters["wind_speed_perp"]
  
     # Characteristic correlation time tau_atm = L_0 / (2 pi V_perp).
@@ -336,79 +346,258 @@ def make_atmospheric_phase_process(distance: float, timeline_stop_time_ps: float
         seed           = seed,
     )
 
-def polarization_fidelity(distance: float, wavelength: float, w_0: float, photon_number: float, pulse_duration: float, 
-    detection_time: float, friction_velocity: float, height: float, C_n2: float, rho_eval: float = 0):
+
+# ===========================================================================
+#  Factory tied to the simulator's data structures
+# ===========================================================================
+def polarization_jones_vector(polarization):
+    """
+    Converte a especificação de polarização em um vetor de Jones
+    normalizado (eps1, eps2), com o modo 1 = horizontal (a1) e o modo
+    2 = vertical (a2) dos operadores de Stokes.
+
+    Formatos aceitos:
+      a) rótulo (str): 'H','V','D+45','D-45','R','L' (e sinônimos);
+      b) vetor de Jones explícito (ex, ey) complexos (eliptica geral);
+      c) parâmetros da elipse (theta, delta) reais [rad].
+    O vetor retornado já vem normalizado (|eps1|^2 + |eps2|^2 = 1).
+    """
+    if isinstance(polarization, str):
+        p = polarization.strip().upper()
+        table = {
+            'H': (1, 0), 'HORIZONTAL': (1, 0),
+            'V': (0, 1), 'VERTICAL': (0, 1),
+            'D': (1, 1), 'D+45': (1, 1), '45': (1, 1),
+            'A': (1, -1), 'D-45': (1, -1), '135': (1, -1),
+            'R': (1, -1j), 'RCP': (1, -1j), 'RIGHT': (1, -1j),
+            'L': (1, 1j), 'LCP': (1, 1j), 'LEFT': (1, 1j),
+        }
+        if p not in table:
+            raise ValueError(f"Polarização desconhecida: {polarization!r}")
+        ex, ey = table[p]
+
+    elif isinstance(polarization, (tuple, list)) and len(polarization) == 2:
+        a, b = polarization
+        if isinstance(a, complex) or isinstance(b, complex):
+            # vetor de Jones já fornecido explicitamente
+            ex, ey = a, b
+        else:
+            # (theta, delta) -> elipse de polarização geral
+            theta, delta = a, b
+            ex = math.cos(theta)
+            ey = math.sin(theta) * cmath.exp(1j * delta)
+    else:
+        raise ValueError(
+            "polarization deve ser um rótulo str, um vetor de Jones "
+            "(ex, ey) ou parâmetros de elipse (theta, delta)."
+        )
+
+    ex, ey = complex(ex), complex(ey)
+    norm = math.sqrt(abs(ex) ** 2 + abs(ey) ** 2)
+    if norm == 0:
+        raise ValueError("Vetor de polarização nulo.")
+    return ex / norm, ey / norm
+
+def two_mode_ladder_operators(N):
+    """
+    Constrói os operadores de aniquilação a1, a2 de dois modos (modo 1 =
+    horizontal, modo 2 = vertical), truncados em N fótons por modo, na
+    base de Fock |n1> (x) |n2>.
+
+    Operador de aniquilação de modo único: a|n> = sqrt(n) |n-1>.
+    Operadores de dois modos por produto de Kronecker:
+        a1 = a (x) I ,   a2 = I (x) a .
+    Matrizes esparsas (csr) de dimensão (N+1)^2 x (N+1)^2.
+    """
+    # a|n> = sqrt(n)|n-1>  ->  entradas sqrt(1..N) na 1a super-diagonal
+    a = diags(np.sqrt(np.arange(1, N + 1)), offsets=1, format="csr")
+    Id = identity(N + 1, format="csr")
+    a1 = kron(a, Id, format="csr")   # aniquila no modo horizontal
+    a2 = kron(Id, a, format="csr")   # aniquila no modo vertical
+    return a1, a2
+
+
+def polarized_fock_state(eps, n0):
+    """
+    Vetor de estado |n0, eps> = (b^dagger)^{n0} / sqrt(n0!) |0,0>,
+    com b^dagger = eps1 a1^dagger + eps2 a2^dagger, construído aplicando
+    n0 vezes o operador de criação do modo de polarização ao vácuo.
+
+    Retorna um numpy array denso de tamanho (n0+1)^2.
+    """
+    eps1, eps2 = eps
+    N = n0                                   # N = n0 fotons/modo bastam
+    a1, a2 = two_mode_ladder_operators(N)
+    b_dag = eps1 * a1.getH() + eps2 * a2.getH()   # operador de criacao do modo b
+
+    dim = (N + 1) ** 2
+    psi = np.zeros(dim, dtype=complex)
+    psi[0] = 1.0                              # vacuo |0,0>  (indice 0)
+    for _ in range(n0):                       # aplica b^dagger n0 vezes
+        psi = b_dag.dot(psi)
+    norm = np.linalg.norm(psi)
+    if norm > 0:                              # normaliza (== dividir por sqrt(n0!))
+        psi = psi / norm
+    return psi
+
+def _coherence_matrix(eps, n0):
+    """
+    Matriz de coerência da fonte 2x2
+
+        N0[i-1, j-1] = < n0, eps | a^dagger_i a_j | n0, eps > ,
+
+    para i, j em {1, 2}. Retorna uma tupla ((N0_11, N0_12),(N0_21, N0_22))
+    """
+    if n0 == 0:
+        return ((0j, 0j), (0j, 0j))
+    N = n0
+    a1, a2 = two_mode_ladder_operators(N)
+    a = {1: a1, 2: a2}
+    psi = polarized_fock_state(eps, n0)
+
+    N0 = [[0j, 0j], [0j, 0j]]
+    for i in (1, 2):
+        for j in (1, 2):
+            op = a[i].getH().dot(a[j])           # a^dagger_i a_j (esparsa)
+            N0[i - 1][j - 1] = complex(np.vdot(psi, op.dot(psi)))
+    return ((N0[0][0], N0[0][1]), (N0[1][0], N0[1][1]))
+
+def initial_number_operator(i, j, polarization, n0):
+    """
+    Elemento (i, j) da matriz de coerência da fonte,
+    n0_ij = < a^dagger_i a_j >, obtido a partir dos operadores de
+    criação/aniquilação dos fótons.
+ 
+      - n0 inteiro (>= 0): usa a construção quântica explícita -- monta o
+        estado de Fock polarizado |n0, eps> aplicando b^dagger ao vácuo e
+        avalia < a^dagger_i a_j > sobre ele.
+ 
+      - n0 não inteiro (>= 0): o estado de Fock não está definido; utiliza-se
+        a forma fechada do primeiro momento
+ 
+              n0 * conj(eps_i) * eps_j ,
+ 
+        que é o resultado exato para um estado coerente (Glauber) de média
+        n0 = |alpha|^2, típico de pulsos coerentes fracos (WCP). Veja a observação
+        
+    Observação: fontes com número médio de fótons não inteiro (coerente / WCP)
+    A construção de Fock exige n0 inteiro (número de fótons definido ou apenas
+    um fóton para o caso SPS). Para uma fonte em estado coerente (Glauber)
+    polarizada ao longo de eps, com amplitude alpha e número médio 
+    n0 = |alpha|^2 real (não necessariamente inteiro) -- caso tipico 
+    dos pulsos coerentes fracos (WCP) em QKD -- o mesmo cálculo do 
+    primeiro momento fornece
+ 
+        < a^dagger_i a_j > = n0 * conj(eps_i) * eps_j ,
+ 
+    identica em forma ao caso de Fock. Isto é, a matriz de coerência (primeiro
+    momento) não distingue um estado de Fock de um estado coerente de mesma
+    média n0; por isso initial_number_operator() tambem aceita n0 não inteiro,
+    usando diretamente essa forma fechada.
+ 
+    A diferença entre as duas estatísticas aparece apenas no segundo momento do
+    número total, que entra no grau de polarização via < S0(S0+2) >:
+    - Fock (número definido):   S0 e nítido (var = 0)  -> < S0(S0+2) > = n0(n0+2);
+    - coerente (Poissoniano):   var(S0) = n0           -> < S0(S0+2) > = n0(n0+3).
+    """
+
+    if n0 < 0:
+        raise ValueError(f"n0 deve ser não-negativo (recebido n0={n0!r}).")
+    eps = polarization_jones_vector(polarization)
+    if float(n0).is_integer():
+        # caso SPS: valor esperado sobre o estado de Fock polarizado
+        N0 = _coherence_matrix(eps, int(n0))
+        return N0[i - 1][j - 1]
+    # fonte coerente / WCP: primeiro momento em forma fechada
+    return n0 * eps[i - 1].conjugate() * eps[j - 1]
+
+def n(i, j, loss_percent, polarization, n0):
+    """
+    Elemento (i, j) da matriz de coerencia APOS o canal,
+
+        n_ij = tau * < a^dagger_i a_j > ,   tau = 1 - loss_percent,
+
+    onde < a^dagger_i a_j > e agora o valor esperado quantico do operador
+    numero inicial sobre o estado de n0 fotons polarizados (Secao 3),
+    NAO mais um produto externo postulado.
+
+    Consistencia com o artigo (Eqs. 12/19): para polarization='H' e
+    n0 = n11, resulta n_11 = tau*n11 e n_22 = n_12 = n_21 = 0.
+    """
+    tau = 1 - loss_percent
+    return tau * initial_number_operator(i, j, polarization, n0)
+
+def aa_function(i, j, k, w0, z, rho0, rho, q, loss_percent, polarization, n0):
+    pi = math.pi
+    A_term = (((1/w0**2) + (1/rho0**2))**2+(k**2 / (4 * z**2)))*rho0**4 - 1
+    B_term = (1/w0**2) - ((1j*k)/(2*z)) + (1/rho0**2)
+    exp_term = (-((A_term) + ((B_term)*rho0**2 -1)**2)/(4*(B_term)*(A_term)))*(((k*rho)/z) + q)**2
+    n_ij = n(i, j, loss_percent, polarization, n0)
+    return (((2*pi*n_ij)/w0**2)*((k/(2*pi*z))**2) / (((1/w0**2) + (1/rho0**2))**2 + (k**2 / (4 * z**2)) - (1/rho0**4)))*cmath.exp(exp_term)
+
+def polarization_fidelity(distance: float, wavelength: float, w_0: float, 
+    L0: float, l0: float, C_n2: float, alpha: float, loss_percent: float, 
+    polarization="H", n0: float = 1.0, rho: float = 0):
     '''
-    Calculation of polarization fidelity (degree of polarization of a 
-     Gaussian pulse beam) considering atmospheric turbulence effects.
+    Calculation of polarization fidelity (degree of polarization 
+     for single-foton beam) considering atmospheric turbulence effects.
 
     Based on the results of the article:
-    [1] WANG, X. et al. Effects of atmospheric turbulence on the degree 
-     of polarization of Gaussian pulse quantum beam. Optik, v. 124, 
-     n. 13, p. 1512–1515, jul. 2013.
-     
-    [2] NIELSEN, M. A.; CHUANG, I. L. Quantum Computation and Quantum
-     Information. Cambridge University Press, 2000. §9.3 (relation between
-     degree of polarization and fidelity of the depolarizing channel:
-     F = sqrt((1 + P) / 2).
-    
-    [3] ANDREWS, L. C.; PHILLIPS, R. L. Laser Beam Propagation Through Random Media.
-     SPIE-International Society for Optical Engineering, 2005. p. 61
+    [1] WANG, Y. et al. Degree of polarization for quantum light field
+        propagating through non-Kolmogorov turbulence. Opt. Laser Technol.
+        43, 776-780 (2011). (Eqs. 1, 5, 12, 19)
+    [2] E. Collett, Stokes parameters for quantum systems, Am. J. Phys. 38,
+        563-574 (1970).
+    [3] M. Chekhova, P. Banzer, Polarization of Light: In Classical, Quantum,
+        and Nonlinear Optics, De Gruyter (2021), Cap. 11.
+    [4] R. J. Glauber, Coherent and incoherent states of the radiation field,
+        Phys. Rev. 131, 2766-2788 (1963). (estados coerentes -- "de Glauber")
+
 
     Attributes:
         distance: Largura do canal [m]
         wavelength: Comprimento de onda [nm]
         w_0: Raio inicial do feixe gaussiano (característica do emissor) [cm]
-        photon_number: Número médio de fótons na duração do pulso n_0.
-                        Default 1 (single-photon source). Para fontes WCP,
-                        use o `mean_photon_num` de `ls_params`.
-        pulse_duration: Duração do pulso na fonte T_0 [s]. 
-                         Para fontes CW, use T_0 = 1 / frequency.
-        detection_time: Janela temporal de detecção T [s].
-        friction_velocity: Velocidade de atrito [cm/s]
-        height: Altura acima do solo [cm]
+        L0 : escala externa da turbulencia [m]
+        l0 : escala interna da turbulencia [m]
         C_n2: Constante de estrutura do índice de refração
                [m^(-2/3)] -- normalmente já calculada com a função
                `cn2(...)` do seu loss.py.
-        rho_eval: Coordenada transversal de avaliação rho [m].
-                   Default: Use rho_eval = 0 para
-                   a fidelidade no eixo (limite superior).
+        alpha : constante fractal (expoente) da turbulencia nao-Kolmogorov
+        polarization : Polarização de entrada -- ver
+                       polarization_jones_vector() (rotulo 'H'/'V'/'D+45'/'D-45'/
+                       'R'/'L', vetor de Jones (ex,ey) ou parametros de elipse
+                       (theta, delta))
+        n0 : número médio de fotons do feixe na fonte (default 1, fonte
+             de foton unico)
+        loss_percent : perdas adicionais do canal (0 a 1)
+        rho: Coordenada transversal de avaliação rho [m]. (default 0, no eixo,
+              limite superior do grau de polarizacao).
+                   
+    Return:
+        P: grau de polarização (numero real entre 0 e 1)
     '''
-    # Unit conversions (cm -> m and nm -> m) to keep formulas SI-consistent.
     wavelength_m = wavelength * 1e-9
     w_0_m = w_0 * 1e-2
     k = 2.0 * math.pi / wavelength_m
-    L_0 = outer_scale(friction_velocity, height)
+    z = distance
+    q = (6.62607015*1e-34) / wavelength_m # E = h*v -> p = h/λ 
     
-    # -- rho_0^2 (Below Eq. 8 of [1]) ---
-    # C_n^2 is constant throughout the integration interval due to the fact that it is a horizontal ground-to-ground link.
-    rho_0_sq = (1/((1.45*(3/8)*distance*C_n2*k**2)**(6/5)))*(1/(1-0.715*((2*math.pi)/L_0)**(1/3)))
+    A_function = (1/(4*(math.pi**2)))*gamma(alpha - 1)*cos((alpha*math.pi)/2)
+    c_function = (gamma(5-(alpha/2))*A_function*(2*math.pi)/3)**(1/(alpha - 5))
+    k0 = (2*math.pi)/L0
+    k_m = c_function/l0
+    beta = 2*k0**2 - 2*k_m**2 + alpha*k_m**2
+    rho0 = (((((math.pi*k)**2)*z*A_function*C_n2)/(6*(alpha-2)))*((k_m**(2-alpha))*beta*cmath.exp((k0/k_m)**2)*gammaincc(2-(alpha/2), (k0/k_m)**2) - 2*k0**(4-alpha)))**(-1/2)
     
-    # -- T_1 (Below Eq. 10 of [1]) ---
-    # Horizontal link with constant C_n^2 -> INTEGRAL = C_n^2 * z.
-    # Consider the approximation that the link is horizontal and without 
-    #  variation in the height of the nodes. Therefore, C_n^2 remains 
-    #  constant (and INTEGRAL_0^z C_n^2(z') dz = C_n^2 * z), since the altitude did not vary.
-    T_1 = math.sqrt((pulse_duration**2) + (26.31/(_C_LIGHT**2)) * (L_0**(5.0/3.0)) * C_n2 * distance)
-    # -- c parameter (real). Eq. on p.2 of [1]:
-    c = ((1/w_0_m**2) + (1/rho_0_sq))**2 + (k**2 / (4*distance**2)) - (1/rho_0_sq**2)
-    # -- a parameter (complex). Eq. on p.2 of [1]:
-    a = ((1/w_0_m**2) - (1j*k/(2*distance)))**2 - c**2
-    # -- b parameter (complex). Eq. on p.2 of [1]:
-    b = ((1/w_0_m**2) + (1/rho_0_sq) - (1j*k/(2*distance)))
-    # --- d coefficient. Below Eq. (14) of [1]:
-    d = ((math.pi * photon_number * pulse_duration * math.sqrt(math.pi) / (math.sqrt(2.0)*w_0_m**2)) * ((k/(2*math.pi*distance))**2) * erf(math.sqrt(2.0)*(detection_time - distance / _C_LIGHT) / T_1))
+    common = dict(k=k, w0=w_0_m, z=z, rho0=rho0, rho=rho, q=q, loss_percent=loss_percent, polarization=polarization, n0=n0)
+    S0 = aa_function(1, 1, **common) + aa_function(2, 2, **common)
+    S1 = aa_function(1, 1, **common) - aa_function(2, 2, **common)
+    S2 = aa_function(1, 2, **common) + aa_function(2, 1, **common)
+    S3 = 1j*(aa_function(2, 1, **common) - aa_function(1, 2, **common))
+    P_squared = (S1**2 + S2**2 + S3**2) / (S0*(S0 + 2))
 
-    # Eq. (14) of [1]
-    exponent = -(a * (k ** 2) * (rho_eval ** 2)) / (4.0 * b * c * (distance ** 2))
-
-    # ratio = (d * exp_term)/(2.0 * c + (d * exp_term)) = 1/(1 + ((2*c)/d)*exp_term) where exp_term = exp(-p)
-    exp_term = cmath.exp(-exponent)
-    ratio = 1/(1 + ((2*c)/d)*exp_term)
-    degree_p = max(0.0, min(1.0, abs(cmath.sqrt(ratio))))
-    
-    # -- Reference [2]
-    return math.sqrt((1+degree_p)/2)
+    return cmath.sqrt(P_squared).real
 
 def cn2(time: float, sunset: float, sunrise: float, temperature: float, wind_speed: float, rms_wind_speed: float, relative_humidity: float, height: float):
     '''
@@ -427,6 +616,7 @@ def cn2(time: float, sunset: float, sunrise: float, temperature: float, wind_spe
         sunrise: Nascer do sol [h]
         temperature: Temperatura do ar [Kelvin]
         wind_speed: Velocidade do Vento [m/s]
+        rms_wind_speed: Velocidade do Vento na troposfera [m/s]
         relative_humidity: Umidade Relativa [%]
         height: Altitude [m]
 
@@ -471,15 +661,18 @@ def cn2(time: float, sunset: float, sunrise: float, temperature: float, wind_spe
         w = 0.08
     elif 13 < th:
         w = 0.13
-    # 9ºC <= temperature <= 35ºC, 0 <= wind_speed <= 10 m/s, 14% <= relative_humidity <= 92%
-    if (282.15 <= temperature <= 308.15) and (0 <= wind_speed <= 10) and (0.14 <= relative_humidity <= 0.92):
-        forT = temperature*2*1e-15
-        forU = -wind_speed*2.5*1e-15 + (wind_speed**2)*1.2*1e-15 - (wind_speed**3)*8.5*1e-17
-        forRH = -(relative_humidity)*2.8*1e-15 + (relative_humidity**2)*2.9*1e-17 - (relative_humidity**3)*1.1*1e-19
-        c0 = (w*3.8*1e-14 + forT + forU + forRH -5.3*1e-13)/(15**(-4/3))
-        return (5.96e-3)*((rms_wind_speed/27)**2)*((height*1e-5)**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
-    else: # Outside the validity range of the model.
-        return None
+    # ATTENTION: This model uses the $C_n^2$ function from reference [1] as a FIRST APPROXIMATION. Proper operation is 
+    # not guaranteed for values ​​outside the following range: 9ºC <= temperature <= 35ºC, 0 <= wind_speed <= 10 m/s, 
+    # 14% <= relative_humidity <= 92%. In the future, it will be necessary to structure a model consistent with 
+    # the simulated geographic region. The development of this model can be tracked at <github.com/...>.
+    # 
+
+    forT = temperature*2*1e-15
+    forU = -wind_speed*2.5*1e-15 + (wind_speed**2)*1.2*1e-15 - (wind_speed**3)*8.5*1e-17
+    forRH = -(relative_humidity)*2.8*1e-15 + (relative_humidity**2)*2.9*1e-17 - (relative_humidity**3)*1.1*1e-19
+    c0 = (w*3.8*1e-14 + forT + forU + forRH -5.3*1e-13)/(15**(-4/3))
+    return (5.96e-3)*((rms_wind_speed/27)**2)*((height*1e-5)**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
+
         
 
 def n_value(wavelength: float, temperature: float, salinity: int = 0):
@@ -543,10 +736,13 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         
         size_raindrop: Raio da gota de chuva [cm]
         viscosity: Viscosidade do ar [(g/cm)s]
-        precipitation_rate: Taxa e precipitação [cm/s]
+        precipitation_rate: Taxa de precipitação [cm/s]
         Q_scat: Eficiência de dispersão
         density = 1: Densidade da água [g/cm³]
         gravitation = 980: Aceleração da gravidade [cm/s²]
+        
+    Returns:
+        float: loss rate for transmitted photons (in %/100)
     '''
     wavelength_m = wavelength * 1e-9 # nm to m
     # Cálculo da Viscosidade Dinâmica: Equação de Sutherland (mu = mu_0*((T_0+S)/(T+S))*(T/T_0)**(3/2)) 
