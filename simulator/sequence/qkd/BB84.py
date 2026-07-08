@@ -56,7 +56,7 @@ class BB84Message(Message):
         frequency (float): frequency for qubit generation (if `msg_type == BEGIN_PHOTON_PULSE`).
         light_time (float): lenght of time to send qubits (if `msg_type == BEGIN_PHOTON_PULSE`).
         start_time (int): simulation start time of qubit pulse (if `msg_type == BEGIN_PHOTON_PULSE`).
-        wavelength (float): wavelength (in nm) of photons (if `msg_type == BEGIN_PHOTON_PULSE`).
+        wavelength (float): wavelength (in m) of photons (if `msg_type == BEGIN_PHOTON_PULSE`).
         bases (list[int]): list of measurement bases (if `msg_type == BASIS_LIST`).
         indices (list[int]): list of indices for matching bases (if `msg_type == MATCHING_INDICES`).
     """

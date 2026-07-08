@@ -91,7 +91,7 @@ class COWMessage(Message):
         frequency (float): light-source clock frequency in Hz (BEGIN_PHOTON_PULSE only).
         light_time (float): burst duration in s (BEGIN_PHOTON_PULSE only).
         start_time (int): burst start time in ps (BEGIN_PHOTON_PULSE only).
-        wavelength (float): photon wavelength in nm (BEGIN_PHOTON_PULSE only).
+        wavelength (float): photon wavelength in m (BEGIN_PHOTON_PULSE only).
         decoy_rate (float): fraction of symbols used as decoys (BEGIN_PHOTON_PULSE only).
         indices (list[int]): detected / sifted symbol indices (RECEIVED_QUBITS, SIFTED_INDICES).
         bits (list[int]): raw detected bits (RECEIVED_QUBITS).

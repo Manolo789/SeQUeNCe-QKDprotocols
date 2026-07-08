@@ -129,13 +129,16 @@ class ThermalNoiseSource(Entity):
             return (complex(math.cos(theta)), complex(math.sin(theta)))
 
         elif self.encoding_type["name"] in ("time_bin", "time_bin_cow"):
-            # Chegada no bin early (0) ou late (1) com p=0.5
+            # Chegada no bin early (0) ou late (1) com p=0.5.
+            # Photon.__init__ exige `tuple`; time_bin_cow["early"/"late"] sao
+            # np.ndarray (EARLY_STATE/LATE_STATE) -> converter com tuple().
+
             if rng.random() < 0.5:
-                return time_bin_cow["early"] if "cow" in self.encoding_type["name"] \
-                       else (complex(1), complex(0))
+                return tuple(time_bin_cow["early"]) if "cow" in self.encoding_type["name"] \
+                        else (complex(1), complex(0))
             else:
-                return time_bin_cow["late"] if "cow" in self.encoding_type["name"] \
-                       else (complex(0), complex(1))
+                return tuple(time_bin_cow["late"]) if "cow" in self.encoding_type["name"] \
+                        else (complex(0), complex(1))
         else:
             # Fallback genérico: superposição uniforme
             return (complex(1 / math.sqrt(2)), complex(1 / math.sqrt(2)))

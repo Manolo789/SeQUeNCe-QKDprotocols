@@ -23,15 +23,15 @@ class LightSource(Entity):
         name (str): label for beamsplitter instance
         timeline (Timeline): timeline for simulation
         frequency (float): frequency (in Hz) of photon creation.
-        wavelength (float): wavelength (in nm) of emitted photons.
-        linewidth (float): st. dev. in photon wavelength (in nm).
+        wavelength (float): wavelength (in m) of emitted photons.
+        linewidth (float): st. dev. in photon wavelength (in m).
         mean_photon_num (float): mean number of photons emitted each period.
         encoding_type (dict[str, Any]): encoding scheme of emitted photons (as defined in the encoding module).
         phase_error (float): phase error applied to qubits.
         photon_counter (int): counter for number of photons emitted.
     """
 
-    def __init__(self, name, timeline, frequency=8e7, wavelength=1550, bandwidth=0, mean_photon_num=0.1,
+    def __init__(self, name, timeline, frequency=8e7, wavelength=1550e-9, bandwidth=0, mean_photon_num=0.1,
                  encoding_type=polarization, phase_error=0):
         """Constructor for the LightSource class.
 
@@ -39,7 +39,7 @@ class LightSource(Entity):
             name (str): name of the light source instance.
             timeline (Timeline): simulation timeline.
             frequency (float): frequency (in Hz) of photon creation (default 8e7).
-            wavelength (float): wavelength (in nm) of emitted photons (default 1550).
+            wavelength (float): wavelength (in m) of emitted photons (default 1550e-9).
             bandwidth (float): st. dev. in photon wavelength (default 0).
             mean_photon_num (float): mean number of photons emitted each period (default 0.1).
             encoding_type (dict): encoding scheme of emitted photons (as defined in the encoding module) (default polarization).
@@ -48,8 +48,8 @@ class LightSource(Entity):
 
         Entity.__init__(self, name, timeline)
         self.frequency = frequency  # measured in Hz
-        self.wavelength = wavelength  # measured in nm
-        self.linewidth = bandwidth  # st. dev. in photon wavelength (nm)
+        self.wavelength = wavelength  # measured in m
+        self.linewidth = bandwidth  # st. dev. in photon wavelength (m)
         self.mean_photon_num = mean_photon_num
         self.encoding_type = encoding_type
         self.phase_error = phase_error
@@ -107,7 +107,7 @@ class SPDCSource(LightSource):
         name (str): label for beamsplitter instance
         timeline (Timeline): timeline for simulation
         frequency (float): frequency (in Hz) of photon creation.
-        wavelengths (list[float]): wavelengths (in nm) of emitted entangled photons.
+        wavelengths (list[float]): wavelengths (in m) of emitted entangled photons.
             If a list is given, it should contain two elements (corresponding to two modes).
         linewidth (float): st. dev. in photon wavelength (in nm) (currently unused).
         mean_photon_num (float): mean number of photons emitted each period.
