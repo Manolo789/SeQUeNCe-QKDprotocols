@@ -1,13 +1,14 @@
 """Diurnal atmospheric profile and scenario materialiser for QKD sweeps.
 
-Provides a simple time-of-day model that maps an hour in [0, 24) onto a
+Provides a time-of-day model that maps an hour in [0, 24) onto a
 self-consistent set of atmospheric parameters (T, P, U, RH, ...) and feeds
 them into the loss-parameter and thermal-noise dicts consumed by
 :func:`QKD_Extension.sim_scenario`.
 """
 
 import math
-from QCLoss.loss import cn2, wind_speed_perp, f_velocity, viscosity_shuterland
+from QCLoss.loss import (f_velocity, viscosity_sutherland, wind_speed_perp, cn2_horizontal_link)
+from QCLoss.sky_radiance import b_sky_at
 import pandas as pd
 from datetime import datetime
 
@@ -59,15 +60,14 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
     correspondencias = dataframe.index[dataframe[0] == date]
     index = correspondencias[0] if len(correspondencias) > 0 else None
     
-    T = float(dataframe[4][index]) + 273.15
-    P = float(dataframe[3][index])
-    u = float(dataframe[7][index])
-    u_star = f_velocity(wind_speed=u, T_classification=7, height_ag=base_loss_parameters["height"]/100)
+    T  = float(dataframe[4][index]) + 273.15          # °C -> K
+    P  = float(dataframe[3][index]) * 100.0           # hPa -> Pa   (SI!)
+    u  = float(dataframe[7][index])                   # m/s
+    u_star = f_velocity(u, T_classification=7,
+                    height_ag=base_loss_parameters["height_ag"])  # m/s [C5]
     RH = float(dataframe[5][index])
-    rms = 21
-    p_rate = ((float(dataframe[6][index]))/60)/10  # Passo temporal: 1 minuto. Logo, se há X mm Chuva_Tot em 60 s,
-                                                       # então a taxa de precipitação neste instante é X/60 mm/s.
-                                                       # ([mm]/60)/10 = [cm/s]
+    p_rate = float(dataframe[6][index]) / 60.0 * 1e-3  # mm/min -> m/s (SI)
+    
     cn = cn2(time=hour, sunset=sunset, sunrise=sunrise,
              temperature=T,
              wind_speed=u,
@@ -75,19 +75,13 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
              relative_humidity=RH,
              height=link_altitude_m)
 
-    lp = {**base_loss_parameters,
-          "temperature":        T,
-          "pressure":           P,
-          "friction_velocity":  u_star,
-          "wind_speed_perp":    wind_speed_perp(link_altitude_m, u),
-          "precipitation_rate": p_rate,
-          "viscosity": viscosity_shuterland(T),
-          "C_n2":               cn}
+    lp = {**base_loss_parameters, "temperature": T, "pressure": P,
+          "friction_velocity": u_star,
+          "wind_speed_perp": wind_speed_perp(site_altitude, u),
+          "precipitation_rate": p_rate, "C_n2": cn}
 
-    # B_sky changes by ~4 orders of magnitude between night and day.
-    # Values from Pirandola (Phys. Rev. Res. 3, 023130, 2021).
-    is_night = (hour < sunrise) or (hour > sunset)
-    tp = {**base_thermal_params,
-          "B_sky": 1.5e-6 if is_night else 1.5e-2}
+    # B_sky contínuo (substitui o chaveamento binário dia/noite):
+    when = (datetime.fromisoformat(date) + timedelta(hours=hour)).replace(tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+    tp = {**base_thermal_params, "B_sky": b_sky_at(when, latitude, longitude, ls_params["wavelength"], pressure=P)}
 
     return lp, tp, None

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from sequence.components.optical_channel import QuantumChannel, ClassicalChannel, EveQuantumChannel
-from sequence.components.thermal_noise_source import ThermalNoiseSource, compute_n_B, _c
+from sequence.components.thermal_noise_source import ThermalNoiseSource, _c
 from sequence.kernel.event import Event
 from sequence.kernel.process import Process
 from sequence.kernel.timeline import Timeline
@@ -20,7 +20,13 @@ from sequence.topology.node import QKDNode, EveNode
 from sequence.utils.encoding_cow import time_bin_cow
 import sequence.utils.log as log
 
-from QCLoss.loss import f_velocity, outer_scale, inner_scale, viscosity_shuterland, channel_FSO_loss, cn2, polarization_fidelity, make_atmospheric_phase_process, wind_speed_perp
+from QCLoss.loss import (
+    f_velocity, outer_scale, inner_scale, viscosity_sutherland,
+    channel_FSO_loss, cn2_horizontal_link, wind_speed_perp,
+    make_atmospheric_phase_process)
+from QCLoss.sky_radiance import (
+    b_sky_at, n_background, detection_gate_from_detector)
+
 from scenarios import diurnal_profile
 
 
@@ -128,14 +134,15 @@ def _collect_cow_metrics(protocol, visibility, ls_params, loss):
 
 def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
     """Create and connect a ThermalNoiseSource to `detector`."""
-    n_B = compute_n_B(
-        wavelength_nm=ls_params["wavelength"],
-        delta_lambda_nm=thermal_params["delta_lambda_nm"],
-        delta_t_ns=thermal_params["delta_t_ns"],
-        omega_fov_sr=thermal_params["omega_fov_sr"],
-        a_R_cm=thermal_params["a_R_cm"],
-        B_sky=thermal_params["B_sky"],
+    n_B = n_background(
+        wavelength=ls_params["wavelength"],
+        filter_bandwidth=thermal_params["filter_bandwidth"],
+        detection_gate=thermal_params["detection_gate"],
+        fov_solid_angle=thermal_params["fov_solid_angle"],
+        receiver_radius=thermal_params["receiver_radius"],
+        B_sky_si=thermal_params["B_sky"]
     )
+    
     encoding = detector.owner.encoding if hasattr(detector.owner, "encoding") else None
     src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
     src.init()
@@ -185,11 +192,11 @@ def _configure_bob_cow_interferometer(bob, interferometer_phase_error):
 def run_qkd_simulation(
     protocol, ls_params, detector_params, *,
     runtime=20, log_filename=-1, distance=1e3,
-    polarization_fidelity=0.97, attenuation=2e-4,
+    polarization_fidelity=1, attenuation=2e-4,
     keysize=256, key_num=math.inf,
     source_type=None, loss=None, thermal_params=None,
     phase_noise_coefficient=0, interferometer_phase_error=0.20,
-    eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None, polarization="H",
+    eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
 
@@ -245,8 +252,8 @@ def run_qkd_simulation(
             phase_noise_coefficient_seg2=phase_noise_coefficient,
             loss_seg1=loss_seg1,
             loss_seg2=loss_seg2,
-            pf_seg1=_compute_polarization_fidelity(d_seg1, ls_params, detector_params, loss_parameters, polarization),
-            pf_seg2=_compute_polarization_fidelity(d_seg2, ls_params, detector_params, loss_parameters, polarization),
+            pf_seg1=polarization_fidelity,
+            pf_seg2=polarization_fidelity,
             **qc_kwargs_other,
         )
         # total_distance = seg1 + seg2
@@ -333,25 +340,6 @@ def _compute_loss(distance, ls_params, loss_parameters):
     return channel_FSO_loss(distance=distance, wavelength=ls_params["wavelength"], **l_p)
 
 
-def _compute_polarization_fidelity(distance, ls_params, detector_params, loss_parameters, polarization):
-    """Compute the polarization fidelity for the given (distance, atmospheric)
-    configuration. `detector_params` is the list-of-dicts used elsewhere;
-    the count_rate of the first detector defines the detection window."""
-    return polarization_fidelity(
-        distance=distance,
-        wavelength=ls_params["wavelength"],
-        w_0=loss_parameters["w_0"],
-        L0=outer_scale(loss_parameters["height"]),
-        l0=inner_scale(temperature=loss_parameters["temperature"], pressure=loss_parameters["pressure"],friction_velocity=loss_parameters["friction_velocity"], height=loss_parameters["height"], viscosity=loss_parameters["viscosity"]),
-        C_n2=loss_parameters["C_n2"],
-        alpha=11/3,
-        loss_percent=_compute_loss(distance, ls_params, loss_parameters),
-        polarization=polarization,
-        n0=ls_params["mean_photon_num"],
-        rho=0,
-    )
-
-
 def _build_task_kwargs(*, distance, keysize, ls_params, detector_params,
                        loss_parameters, thermal_params, runtime, attenuation,
                        pfid_initial, key_num, source_type, extra_kwargs=None):
@@ -363,9 +351,10 @@ def _build_task_kwargs(*, distance, keysize, ls_params, detector_params,
     scenario) automatically get them right.
     """
     loss = _compute_loss(distance, ls_params, loss_parameters)
-    pfid = (pfid_initial if pfid_initial is not None
-            else _compute_polarization_fidelity(
-                distance, ls_params, detector_params, loss_parameters, extra_kwargs["polarization"]))
+
+    # Turbulência preserva a polarização em modo único (erro <1% em 144 km,
+    # Fedrizzi et al., Nat. Phys. 5, 389 (2009)). Fixado em 1.0.
+    pfid = pfid_initial if pfid_initial is not None else 1.0
 
     kwargs = dict(
         runtime=runtime, distance=distance,
@@ -628,7 +617,7 @@ def run_simulation():
     # Frequency and wavelength from
     # 'THORLABS. DBR78TK, DBR79TK Low-Noise Laser Systems: user guide.
     #  Rev. B.: Thorlabs, Inc., 2025. Documento DOC-102639.'
-    wavelength = 780          # nm
+    wavelength = 780e-9       # nm
     frequency  = 8e6          # Hz
     ls_params     = {"frequency": frequency, "wavelength": wavelength, "mean_photon_num": 1}
     # mean_photon_num for COW from
@@ -650,64 +639,54 @@ def run_simulation():
 
     # -- Atmospheric / site parameters (base values; per-hour overrides
     #    come from diurnal_profile() in scenarios.py)
-    temperature       = 298.15   # Kelvin
-    wind_speed        = 320      # cm/s
-    height_link       = 800      # cm
-    link_altitude_m   = 720 + height_link / 100   # base topo + link mid-altitude
-    friction_velocity = 100*f_velocity(wind_speed=wind_speed/100, T_classification=7, height_ag=height_link/100)      # cm/s
+    temperature   = 298.15            # K
+    pressure      = 92700.0           # Pa   (927 mbar)
+    wind_speed    = 3.2               # m/s  (320 cm/s)
+    height_link   = 8.0               # m ACIMA DO SOLO (800 cm)
+    site_altitude = 720.0             # m ASL — só p/ wind_speed_perp (jato)
+    latitude      = math.radians(-23.5615)   # LARC/EPUSP
+    longitude     = math.radians(-46.7311)
     sunrise = 6.798888
     sunset  = 19.890555         # Sunset/sunrise on Feb 04, 2014 (Crepúsculo tipo -0.833º)
-    viscosity = viscosity_shuterland(temperature)
 
-    cn = cn2(time=12, sunset=sunset, sunrise=sunrise,
-             temperature=temperature, wind_speed=wind_speed / 100,
-             rms_wind_speed=21, relative_humidity=47,
-             height=link_altitude_m)
+    friction_velocity = f_velocity(wind_speed, T_classification=7, height_ag=height_link)      # m/s
+    viscosity = viscosity_sutherland(temperature)
+
+    cn = cn2_horizontal_link(height_link, hour=12.0, sunrise=sunrise,
+                             sunset=sunset, temperature=temperature,
+                             wind_speed=wind_speed, relative_humidity=47.0)
 
     # -- (distance_m, attenuation_dB/m, polarization_fidelity)
-    channel_parameters = (700, 0.0002, None)
+    channel_parameters = (700, 0.0002, 1)
 
     # -- FSO loss parameters (forwarded as **kwargs to channel_FSO_loss)
     loss_parameters = {
-        # Source of information on the factors that influence signal loss:
-        "v_range":            10,                # Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. 2024. p. 352–374'
-        "receiver_radius":    10.3,              # sharpstar-optics.com/Products_1/79.html
-        "pressure":           927,               # labmicro.iag.usp.br/Data/data_PMIAG.html
-        "temperature":        temperature,       # labmicro.iag.usp.br/Data/data_PMIAG.html
-        "w_0":                5,                 # Adopted as a first approximation until more precise measurements are available.
-        "C_n2":               cn,                # computed above
-        "R_0":                math.inf,          # For collimated beams, R_0 = math.inf is adopted
-        "friction_velocity":  friction_velocity, # labmicro.iag.usp.br/Data/data_PMIAG.html
-        "wind_speed_perp":    wind_speed_perp(link_altitude_m, wind_speed / 100),
-        "height":             height_link,       # transmitter/receiver mid-height
-        "size_raindrop":      0.1,               # FADHIL, H. A. et al. Optimization of free space optics parameters: An optimum solution for bad weather conditions. v. 124, n. 19, p. 3969–3973, 1 out. 2013.
-        "viscosity":          viscosity,         # Sutherland, W. (1893), "The viscosity of gases and molecular force", Philosophical Magazine, S. 5, 36, pp. 507-531 (1893)
-        "precipitation_rate": 0,                 # labmicro.iag.usp.br/Data/data_PMIAG.html
-        "Q_scat":             2,                 # look *
+        "visibility":         10e3,             # m   (Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. 2024. p. 352–374')
+        "receiver_radius":    0.103,            # m   (sharpstar-optics.com/Products_1/79.html)
+        "pressure":           pressure,         # Pa  (labmicro.iag.usp.br/Data/data_PMIAG.html)
+        "temperature":        temperature,      # K (labmicro.iag.usp.br/Data/data_PMIAG.html)
+        "w_0":                0.05,             # m   (Adopted as a first approximation until more precise measurements are available.)
+        "C_n2":               cn,
+        "R_0":                math.inf,         # (For collimated beams, R_0 = math.inf is adopted)
+        "friction_velocity":  friction_velocity,# m/s
+        "wind_speed_perp":    wind_speed_perp(site_altitude, wind_speed),
+        "height_ag":          height_link,      # m ACIMA DO SOLO
+        "precipitation_rate": 0.0,              # m/s (1 mm/h = 2,78e-7 m/s, labmicro.iag.usp.br/Data/data_PMIAG.html)
     }
-    # *Calculated using 'Prahl, S. (2026). miepython: Pure python calculation of Mie scattering (Version 3.2.0)
-    #  [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.7949263' and 'Xiaohong Quan and Edward S. Fry, 
-    #  "Empirical equation for the index of refraction of seawater," Appl. Opt. 34, 3477-3480 (1995)'
 
     # -- Thermal-noise parameters
     diameter_sensor = 1e-4         # m (https://media.thorlabs.com/globalassets/items/s/sp/spd/spdmh2/mtn028160-d02.pdf?v=0116030233)
     focal_distance  = 0.7004       # m (https://www.sharpstar-optics.com/Products_1/79.html)
-    bandwidth       = 492767915845 # Hz  (~492 GHz, delta_lambda ~ 1 nm)
     thermal_params = {
-        "delta_lambda_nm": (bandwidth * wavelength ** 2) / (_c * 1e9),
-        "delta_t_ns":      1e9 / count_rate,
-        "omega_fov_sr":    2 * math.pi * (1 - math.cos(math.atan(diameter_sensor / (2 * focal_distance)))),
-        "a_R_cm":          loss_parameters["receiver_radius"],
-        "B_sky":           1e-2, # look **
+        "filter_bandwidth": 1e-9,                                 # m  (Δλ = 1 nm)
+        "detection_gate":   detection_gate_from_detector(time_resolution), # s
+        "fov_solid_angle":  2*math.pi*(1 - math.cos(math.atan(diameter_sensor/(2*focal_distance)))), # sr
+        "receiver_radius":  loss_parameters["receiver_radius"],   # m
+        "B_sky":            b_sky_at(datetime(2014, 2, 4, 15, 0, tzinfo=timezone.utc), latitude, longitude, 780e-9, pressure=pressure),
     }
     # **First approximation adopted of 'PIRANDOLA, S. Limits and security of free-space quantum 
     #   communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021'
     #   A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
-    
-    # Considering that only linear bases are used for the BB84 and B92 protocols, then from theory, 
-    # it can be observed that the degree of polarization is the same for Horizontal, Vertical, 
-    # Antidiagonal (-45º) and Diagonal (+45º) polarization.
-    extra_kwargs = {"polarization": "H"}
 
     # -- Common kwargs reused by every variable-sweep
     common = dict(
@@ -766,13 +745,6 @@ def run_simulation():
     pd.DataFrame({"Total_execution_time_(seconds)":
                   [time.time() - start]}
                  ).to_csv("data/simulator_metrics.csv", index=False)
-    '''
-    for h in range(24):
-        v = cn2(time=h, sunset=sunset, sunrise=sunrise, temperature=temperature,
-            wind_speed=wind_speed/100, rms_wind_speed=21,
-            relative_humidity=47, height=link_altitude_m)
-        print(f"{h:02d}h -> {v:.3e}{'  <-- NEGATIVO' if v < 0 else ''}")
-    '''
 
 if __name__ == "__main__":
     run_simulation()

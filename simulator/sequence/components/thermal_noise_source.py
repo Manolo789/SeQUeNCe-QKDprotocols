@@ -48,46 +48,10 @@ from ..kernel.event import Event
 from ..kernel.process import Process
 from ..utils.encoding import polarization
 from ..utils.encoding_cow import time_bin_cow
+from ...QCLoss.sky_radiance import n_background
 
 _h = 6.62607015e-34   # J·s
 _c = 2.99792458e8     # m/s
-
-"""
-Models sky-brightness photons (n_B) that physically arrive at the
-receiver aperture and are detected with probability η_eff.
-
-References:
-        [1] PIRANDOLA, S. Limits and security of free-space quantum 
-        communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021.
-        [2] MASOUD GHALAII; STEFANO PIRANDOLA. Quantum communications in a moderate-to-
-        strong turbulent space. Communications Physics, v. 5, n. 1, 10 fev. 2022. 
-"""
-
-def compute_n_B(wavelength_nm: float, delta_lambda_nm: float, delta_t_ns: float, omega_fov_sr: float, a_R_cm: float, B_sky: float) -> float:
-    """Background Photons by Optical Mode.
-
-    Ref. [1] Eq. (32):
-        n_B = (π*λ*Γ_R*B_sky_λ) / (h*c)
-        Γ_R = Δλ*Δt*Ω_fov*a_R²
-
-    Args:
-        wavelength_nm  : comprimento de onda [nm]
-        delta_lambda_nm: filtro espectral [nm]
-        delta_t_ns     : janela temporal do detector [ns]
-        omega_fov_sr   : campo de visão [sr]
-        a_R_cm         : raio da abertura do receptor [cm]
-        B_sky          : brilho do céu [W m⁻² nm⁻¹ sr⁻¹]
-                         ~1.5e-6 (noite com céu limpo)  a  ~1.5e-1 (dia nublado)
-
-    Returns:
-        n_B [fótons/modo] — adimensional
-    """
-    delta_lam_m = delta_lambda_nm * 1e-9
-    delta_t_s = delta_t_ns * 1e-9
-    a_R_m = a_R_cm * 1e-2
-
-    Gamma_R = delta_lam_m*delta_t_s*omega_fov_sr*(a_R_m**2)
-    return (math.pi*wavelength_nm*1e-9*Gamma_R *B_sky) / (_h*_c)
 
 
 class ThermalNoiseSource(Entity):
@@ -183,6 +147,6 @@ class ThermalNoiseSource(Entity):
 
     def update_from_params(self, wavelength_nm: float, delta_lambda_nm: float, delta_t_ns: float, omega_fov_sr: float, a_R_cm: float, B_sky: float) -> float:
         """Calcula n_B via Eq.(32) e atualiza a fonte. Retorna n_B calculado."""
-        n_B = compute_n_B(wavelength_nm, delta_lambda_nm, delta_t_ns, omega_fov_sr, a_R_cm, B_sky)
+        n_B = n_background(wavelength_nm, delta_lambda_nm, delta_t_ns, omega_fov_sr, a_R_cm, B_sky)
         self.set_n_B(n_B)
         return n_B
