@@ -45,7 +45,34 @@ import numpy as np
 
 _C_LIGHT = 2.99792458e8
 
-
+def f_velocity(wind_speed: float, T_classification: int, height_ag: float):
+    '''
+    The implementation of the friction velocity calculation was carried 
+    out following the model proposed in the following references:
+    [1] R. HOLTON, J. An Introduction to Dynamic 
+        Meteorology. 4. ed. [s.l.] Elsevier Academic Press, 2004. v. 88p. 130
+    [2] WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods 
+        of Observation. 2024. p. 51
+    
+    Attributes:
+        wind_speed: Velocidade do vento próximo do solo [m/s]
+        T_classification: Parâmetro de classificação de terreno conforme 
+            a tabela da referência 2. Segue uma cópia da tabela:
+            Class Index          Short Terrain Description                   z_0 [m]
+                1         Open sea, fetch at least 5 km                        0.0002
+                2         Mud flats, snow; no vegetation, no obstacles         0.005
+                3         Open flat terrain; grass, few isolated obstacles     0.03
+                4         Low crops; occasional large obstacles, x/H > 20      0.10
+                5         High crops; scattered obstacles, 15 < x/H < 20       0.25
+                6         Parkland, bushes; numerous obstacles, x/H ≈ 10       0.5
+                7         Regular large obstacle coverage (suburb, forest)     1.0
+                8         City centre with high- and low-rise buildings     >= 2.0
+        height_ag: Altura acima do solo (não confundir com a altura acima do nível do mar!) [m]
+    '''
+    # u* = κ*u/ln(z/z₀)
+    classification = {1:0.0002, 2:0.005, 3:0.03, 4:0.10, 5:0.25, 6:0.5, 7:1.0, 8:2.0}
+    
+    return (0.4*wind_speed)/math.log(height_ag/classification[T_classification])
 
 def outer_scale(height: float):
     '''
@@ -88,6 +115,7 @@ def inner_scale(temperature: float, pressure: float, friction_velocity: float, h
         height: Altura acima do solo [cm]
         viscosity: Viscosidade do ar [(g/cm)s]
     '''
+    
     # l0_parameter = C_Tatarskii*(ν³/ε)**(1/4)    (referência 7)
     # C_Tatarskii: A constante de Tatarskii relaciona l0_parameter à microescala de Kolmogorov
     # ν: viscosidade cinemática (ν = viscosidade_dinâmica/densidade_do_ar)
@@ -100,7 +128,21 @@ def inner_scale(temperature: float, pressure: float, friction_velocity: float, h
     air_density = (M_air*(pressure/1013.25))/(1000*R_ideal*temperature)
     return 0.01*C_Tatarskii*(((viscosity/air_density)**3)/((friction_velocity**3)/(0.4*height)))**(1/4) 
 
-def phase_noise(wavelength: float, C_n2: float, friction_velocity: float, height: float):
+def viscosity_shuterland(temperature: float):
+    '''
+    Viscosity calculation
+
+    Based on the results of the article:
+    [1] Sutherland, W. (1893), "The viscosity of gases and molecular force", 
+     Philosophical Magazine, S. 5, 36, pp. 507-531 (1893)
+    '''
+    # Cálculo da Viscosidade Dinâmica: Equação de Sutherland (mu = mu_0*((T_0+S)/(T+S))*(T/T_0)**(3/2)) 
+    # mu_0 = 1.716*1e-5 Kg * m^-1 * s^-1
+    # T_0 = 273.15 K
+    # S = 110.4 K
+    return 1.716*1e-4*((273.15+110.4)/(temperature+110.4))*(temperature/273.15)**(3/2)
+
+def phase_noise(wavelength: float, C_n2: float, height: float):
     '''
     Calculation of the phase noise coefficient 
      considering the effects of atmospheric turbulence.
@@ -112,12 +154,16 @@ def phase_noise(wavelength: float, C_n2: float, friction_velocity: float, height
     Attributes:
         wavelength: Comprimento de onda [nm]
         C_n2: Constante de estrutura do índice de refração
-        friction_velocity: Velocidade de atrito [cm/s]
         height: Altura acima do solo [cm]
+        
+    Note: the returned value is the square root of the variance per meter 
+    from Eq. (75)—the SAME variance to which AtmosphericPhaseProcess renormalizes 
+    (theoretical_variance). Use this only as an alternative Wiener model when there is 
+    no atmospheric_phase_process in the channel; using both simultaneously counts the turbulence twice.
     '''
     # Unit conversions (cm -> m and nm -> m) to keep formulas SI-consistent.
     wavelength_m = wavelength * 1e-9
-    k = 2.0 * math.pi / wavelength_m
+    k = (2*math.pi)/wavelength_m
     K0 = (2*math.pi)/outer_scale(height)
     
     return math.sqrt(0.78 * C_n2 * (k**2) * (K0**(-5/3)))
@@ -527,13 +573,9 @@ def n(i, j, loss_percent, polarization, n0):
     tau = 1 - loss_percent
     return tau * initial_number_operator(i, j, polarization, n0)
 
-def aa_function(i, j, k, w0, z, rho0, rho, q, loss_percent, polarization, n0):
-    pi = math.pi
-    A_term = (((1/w0**2) + (1/rho0**2))**2+(k**2 / (4 * z**2)))*rho0**4 - 1
-    B_term = (1/w0**2) - ((1j*k)/(2*z)) + (1/rho0**2)
-    exp_term = (-((A_term) + ((B_term)*rho0**2 -1)**2)/(4*(B_term)*(A_term)))*(((k*rho)/z) + q)**2
+def aa_function(i, j, w0, loss_percent, polarization, n0, geometric_term, exp_term):
     n_ij = n(i, j, loss_percent, polarization, n0)
-    return (((2*pi*n_ij)/w0**2)*((k/(2*pi*z))**2) / (((1/w0**2) + (1/rho0**2))**2 + (k**2 / (4 * z**2)) - (1/rho0**4)))*cmath.exp(exp_term)
+    return (((2*math.pi*n_ij)/w0**2)*geometric_term)*cmath.exp(exp_term)
 
 def polarization_fidelity(distance: float, wavelength: float, w_0: float, 
     L0: float, l0: float, C_n2: float, alpha: float, loss_percent: float, 
@@ -583,14 +625,20 @@ def polarization_fidelity(distance: float, wavelength: float, w_0: float,
     z = distance
     q = (6.62607015*1e-34) / wavelength_m # E = h*v -> p = h/λ 
     
-    A_function = (1/(4*(math.pi**2)))*gamma(alpha - 1)*cos((alpha*math.pi)/2)
+    A_function = (1/(4*(math.pi**2)))*gamma(alpha - 1)*math.cos((alpha*math.pi)/2)
     c_function = (gamma(5-(alpha/2))*A_function*(2*math.pi)/3)**(1/(alpha - 5))
     k0 = (2*math.pi)/L0
     k_m = c_function/l0
     beta = 2*k0**2 - 2*k_m**2 + alpha*k_m**2
-    rho0 = (((((math.pi*k)**2)*z*A_function*C_n2)/(6*(alpha-2)))*((k_m**(2-alpha))*beta*cmath.exp((k0/k_m)**2)*gammaincc(2-(alpha/2), (k0/k_m)**2) - 2*k0**(4-alpha)))**(-1/2)
-    
-    common = dict(k=k, w0=w_0_m, z=z, rho0=rho0, rho=rho, q=q, loss_percent=loss_percent, polarization=polarization, n0=n0)
+    rho0 = (((((math.pi*k)**2)*z*A_function*C_n2)/(6*(alpha-2)))*((k_m**(2-alpha))*beta*cmath.exp((k0/k_m)**2)*(gamma(2-(alpha/2))*gammaincc(2-(alpha/2), (k0/k_m)**2)) - 2*k0**(4-alpha)))**(-1/2)
+
+
+    A_term = (((1/w0**2) + (1/rho0**2))**2+(k**2 / (4 * z**2)))*rho0**4 - 1
+    B_term = (1/w0**2) - ((1j*k)/(2*z)) + (1/rho0**2)
+    exp_term = (-((A_term) + ((B_term)*rho0**2 -1)**2)/(4*(B_term)*(A_term)))*(((k*rho)/z) + q)**2
+    geometric_term = ((k/(2*math.pi*z))**2) / (((1/w0**2) + (1/rho0**2))**2 + (k**2 / (4 * z**2)) - (1/rho0**4))
+
+    common = dict(w0=w_0_m, loss_percent=loss_percent, polarization=polarization, n0=n0, geometric_term=geometric_term, exp_term=exp_term)
     S0 = aa_function(1, 1, **common) + aa_function(2, 2, **common)
     S1 = aa_function(1, 1, **common) - aa_function(2, 2, **common)
     S2 = aa_function(1, 2, **common) + aa_function(2, 1, **common)
@@ -671,7 +719,11 @@ def cn2(time: float, sunset: float, sunrise: float, temperature: float, wind_spe
     forU = -wind_speed*2.5*1e-15 + (wind_speed**2)*1.2*1e-15 - (wind_speed**3)*8.5*1e-17
     forRH = -(relative_humidity)*2.8*1e-15 + (relative_humidity**2)*2.9*1e-17 - (relative_humidity**3)*1.1*1e-19
     c0 = (w*3.8*1e-14 + forT + forU + forRH -5.3*1e-13)/(15**(-4/3))
-    return (5.96e-3)*((rms_wind_speed/27)**2)*((height*1e-5)**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
+    result = (5.96e-3)*((rms_wind_speed/27)**2)*((height*1e-5)**10)*math.exp(-height/1000) + (2.7e-16)*math.exp(-height/1500) + c0*math.exp(-height/100)
+    # Until a C_n^2 model is developed that is geographically consistent with the study 
+    # environment (São Paulo, SP – Brazil), a floor value for C_n^2 is established. 
+    # This measure is TEMPORARY and represents a first approximation.
+    return max(result, 1e-17)
 
         
 
@@ -716,6 +768,9 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
 
         [7] ANDREWS, L. C.; PHILLIPS, R. L. Laser Beam Propagation Through Random Media.
         SPIE-International Society for Optical Engineering, 2005. p. 57–82
+        
+        [8] MAHA ACHOUR. Simulating atmospheric free-space optical 
+        propagation: rainfall attenuation. Proceedings of SPIE, 30 abr. 2002.
 
     Attributes:
         distance: Distância [m]
@@ -745,12 +800,6 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         float: loss rate for transmitted photons (in %/100)
     '''
     wavelength_m = wavelength * 1e-9 # nm to m
-    # Cálculo da Viscosidade Dinâmica: Equação de Sutherland (mu = mu_0*((T_0+S)/(T+S))*(T/T_0)**(3/2)) 
-    # mu_0 = 1.716*1e-5 Kg * m^-1 * s^-1
-    # T_0 = 273.15 K
-    # S = 110.4 K
-    if viscosity == None:
-        viscosity = 1.716*1e-4*((273.15+110.4)/(temperature+110.4))*(temperature/273.15)**(3/2)
     l0_parameter = inner_scale(temperature, pressure, friction_velocity, height, viscosity)
 
     # Fog Attenuation (referência 1)
@@ -783,13 +832,13 @@ def channel_FSO_loss(distance: float, wavelength: float, v_range: float,
         w_lt2 = w_z2*(1+1.63*(A_rytov**(6/5))*((2*distance)/(k_wave*w_z2)))
     eta_turb = 1 - math.exp(-(2*(receiver_radius*0.01)**2)/(w_lt2))
 
-    # Rain attenuation (referência 1, 3 e 6)
+    # Rain attenuation (referência 1, 3, 6 e 8)
     if Q_scat is None:
         m_water = n_value(wavelength, temperature) + 0j
-        Q_scat, _, _, _ = miepython.efficiencies_mx(m_water, (2*math.pi*size_raindrop/wavelength*1e-7))
+        Q_scat, _, _, _ = miepython.efficiencies_mx(m_water, (2*math.pi*size_raindrop/(wavelength*1e-7)))
     limit_s_precipitation = (2*(size_raindrop**2)*density*gravitation)/(9*viscosity)# Velocidade limite de precipitação
     concentration_raindrop = precipitation_rate/((4/3)*math.pi*(size_raindrop**3)*limit_s_precipitation) # Concentração da gotícula de chuva (Distribuição da gota da chuva)
-    beta_rain = (math.pi*(size_raindrop**3)*concentration_raindrop*Q_scat/(wavelength*1e-7))
+    beta_rain = (math.pi*(size_raindrop**2)*concentration_raindrop*Q_scat)
     eta_rain = math.exp(-beta_rain*distance*1e2)
         
     return 1 - (eta_fog*eta_rain*eta_turb)

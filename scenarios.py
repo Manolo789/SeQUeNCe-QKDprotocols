@@ -7,7 +7,7 @@ them into the loss-parameter and thermal-noise dicts consumed by
 """
 
 import math
-from QCLoss.loss import cn2, wind_speed_perp
+from QCLoss.loss import cn2, wind_speed_perp, f_velocity, viscosity_shuterland
 import pandas as pd
 from datetime import datetime
 
@@ -39,7 +39,7 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
     Returns:
         tuple: (loss_parameters, thermal_params, ls_overrides).
     """
-    
+    '''
     horas = int(hour)
     resto_minutos = (hour - horas) * 60
     minutos = int(resto_minutos)
@@ -54,19 +54,20 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
         horas += 1
     
     date = datetime.strptime(date+" "+str(horas)+":"+str(minutos)+":"+str(segundos), "%Y-%m-%d %H:%M:%S")
+    '''
+    date = datetime.fromisoformat(date) + timedelta(hours=hour)
     correspondencias = dataframe.index[dataframe[0] == date]
     index = correspondencias[0] if len(correspondencias) > 0 else None
     
     T = float(dataframe[4][index]) + 273.15
     P = float(dataframe[3][index])
     u = float(dataframe[7][index])
-    u_star = u * 100
-    RH = float(dataframe[5][index]) / 100
+    u_star = f_velocity(wind_speed=u, T_classification=7, height_ag=base_loss_parameters["height"]/100)
+    RH = float(dataframe[5][index])
     rms = 21
     p_rate = ((float(dataframe[6][index]))/60)/10  # Passo temporal: 1 minuto. Logo, se há X mm Chuva_Tot em 60 s,
                                                        # então a taxa de precipitação neste instante é X/60 mm/s.
-                                                       # ([mm]/60)*10 = [cm/s]
-    print(T, P, u, u_star, RH, rms, p_rate)
+                                                       # ([mm]/60)/10 = [cm/s]
     cn = cn2(time=hour, sunset=sunset, sunrise=sunrise,
              temperature=T,
              wind_speed=u,
@@ -80,6 +81,7 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
           "friction_velocity":  u_star,
           "wind_speed_perp":    wind_speed_perp(link_altitude_m, u),
           "precipitation_rate": p_rate,
+          "viscosity": viscosity_shuterland(T),
           "C_n2":               cn}
 
     # B_sky changes by ~4 orders of magnitude between night and day.

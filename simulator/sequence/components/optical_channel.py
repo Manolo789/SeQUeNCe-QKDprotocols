@@ -99,6 +99,9 @@ class QuantumChannel(OpticalChannel):
             for a channel of length L is σ_φ = phase_noise_coefficient × √L.
             Default 0.0 (no channel phase noise).
             Typical value: 0.005–0.02 rad/√m for standard telecom fiber.
+            Observation: Atmospheric turbulence enters exclusively via atmospheric_phase_process 
+            (constructed from loss_parameters). Never populate this parameter with phase_noise() 
+            from QCLoss/loss.py when loss_parameters is present—doing so double-counts the turbulence.
 
     """
 
@@ -342,8 +345,8 @@ class EveQuantumChannel(QuantumChannel):
     """
 
     def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
-        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, phase_noise_coefficient_seg2: "float | None" = None,
-        loss: "float | None" = None, atmospheric_phase_process: "Optional[AtmosphericPhaseProcess]" = None, atmospheric_phase_process_seg2: "Optional[AtmosphericPhaseProcess]" = None) -> None:
+        pf_seg1: float = 1.0, pf_seg2: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, phase_noise_coefficient_seg2: "float | None" = None,
+        loss_seg1: "float | None" = None, loss_seg2: "float | None" = None, atmospheric_phase_process: "Optional[AtmosphericPhaseProcess]" = None, atmospheric_phase_process_seg2: "Optional[AtmosphericPhaseProcess]" = None) -> None:
         """
         Args:
             name:                 nome do canal.
@@ -362,14 +365,16 @@ class EveQuantumChannel(QuantumChannel):
             name, timeline,
             attenuation=attenuation,
             distance=dist_seg1,
-            polarization_fidelity=polarization_fidelity,
+            polarization_fidelity=pf_seg1,
             light_speed=light_speed,
             frequency=frequency,
             phase_noise_coefficient=phase_noise_coefficient,
-            loss=loss, atmospheric_phase_process=atmospheric_phase_process,
+            loss=loss_seg1, atmospheric_phase_process=atmospheric_phase_process,
         )
         self.eve_node: "EveNode" = eve_node
         self.eve_position: float = eve_position
+        self.loss_seg2: "float | None" = loss_seg2
+        self.pf_seg2: float = pf_seg2
         self._total_distance: float = distance
         self._seg2: Optional[QuantumChannel] = None   # criado em init()
         self._atm_proc_seg2 = atmospheric_phase_process_seg2
@@ -405,11 +410,11 @@ class EveQuantumChannel(QuantumChannel):
             self.timeline,
             attenuation=self.attenuation,
             distance=dist_seg2,
-            polarization_fidelity=self.polarization_fidelity,
+            polarization_fidelity=self.pf_seg2,
             light_speed=self.light_speed,
             frequency=self.frequency,
             phase_noise_coefficient=self._phase_noise_coef_seg2,
-            loss=self._loss_spec, atmospheric_phase_process=self._atm_proc_seg2,
+            loss=self.loss_seg2, atmospheric_phase_process=self._atm_proc_seg2,
         )
         # Registra _seg2 em Eve com a chave 'bob'.
         # Eve chamará eve.send_qubit('bob') após intercepção.
