@@ -213,6 +213,10 @@ def cn2_surface_sadot_kopeika(hour: float, sunrise: float, sunset: float,
 
     Validade [Ben04]: 282 K ≤ T ≤ 308 K; 0 ≤ U ≤ 10 m/s; 14 % ≤ RH ≤ 92 %.
     """
+    # ATTENTION: This model uses the $C_n^2$ function from reference [SK92] as a FIRST APPROXIMATION. Proper operation is 
+    # not guaranteed for values ​​outside the following range: 282 K ≤ T ≤ 308 K, 0 ≤ U ≤ 10 m/s, 
+    # 14 % ≤ RH ≤ 92 %. In the future, it will be necessary to structure a model consistent with 
+    # the simulated geographic region.
     T, U, RH = temperature, wind_speed, relative_humidity
     if not (282.0 <= T <= 308.0 and 0.0 <= U <= 10.0 and 14.0 <= RH <= 92.0):
         warnings.warn(

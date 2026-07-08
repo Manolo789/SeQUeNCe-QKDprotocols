@@ -10,10 +10,12 @@ import math
 from QCLoss.loss import (f_velocity, viscosity_sutherland, wind_speed_perp, cn2_horizontal_link)
 from QCLoss.sky_radiance import b_sky_at
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
 
 def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
-                ls_params, sunrise, sunset, link_altitude_m, date, dataframe):
+                ls_params, sunrise, sunset, site_altitude, latitude,
+                longitude, local_tz, date, dataframe):
     """Build (loss_parameters, thermal_params, ls_overrides) for one hour.
 
     The return shape (3-tuple) is the exact contract expected by
@@ -56,8 +58,8 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
     
     date = datetime.strptime(date+" "+str(horas)+":"+str(minutos)+":"+str(segundos), "%Y-%m-%d %H:%M:%S")
     '''
-    date = datetime.fromisoformat(date) + timedelta(hours=hour)
-    correspondencias = dataframe.index[dataframe[0] == date]
+    when_local = datetime.fromisoformat(date) + timedelta(hours=hour)
+    correspondencias = dataframe.index[dataframe[0] == when_local]
     index = correspondencias[0] if len(correspondencias) > 0 else None
     
     T  = float(dataframe[4][index]) + 273.15          # °C -> K
@@ -68,12 +70,9 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
     RH = float(dataframe[5][index])
     p_rate = float(dataframe[6][index]) / 60.0 * 1e-3  # mm/min -> m/s (SI)
     
-    cn = cn2(time=hour, sunset=sunset, sunrise=sunrise,
-             temperature=T,
-             wind_speed=u,
-             rms_wind_speed=rms,
-             relative_humidity=RH,
-             height=link_altitude_m)
+    cn = cn2_horizontal_link(base_loss_parameters["height_ag"], hour=hour,
+                         sunrise=sunrise, sunset=sunset, temperature=T,
+                         wind_speed=u, relative_humidity=RH) 
 
     lp = {**base_loss_parameters, "temperature": T, "pressure": P,
           "friction_velocity": u_star,
@@ -81,7 +80,7 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
           "precipitation_rate": p_rate, "C_n2": cn}
 
     # B_sky contínuo (substitui o chaveamento binário dia/noite):
-    when = (datetime.fromisoformat(date) + timedelta(hours=hour)).replace(tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+    when = when_local.replace(tzinfo=local_tz).astimezone(timezone.utc)
     tp = {**base_thermal_params, "B_sky": b_sky_at(when, latitude, longitude, ls_params["wavelength"], pressure=P)}
 
     return lp, tp, None

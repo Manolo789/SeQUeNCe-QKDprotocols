@@ -48,7 +48,7 @@ from ..kernel.event import Event
 from ..kernel.process import Process
 from ..utils.encoding import polarization
 from ..utils.encoding_cow import time_bin_cow
-from ...QCLoss.sky_radiance import n_background
+from QCLoss.sky_radiance import n_background
 
 _h = 6.62607015e-34   # J·s
 _c = 2.99792458e8     # m/s
@@ -145,8 +145,9 @@ class ThermalNoiseSource(Entity):
         self.n_B = n_B
         self._arrival_rate = n_B * self.frequency
 
-    def update_from_params(self, wavelength_nm: float, delta_lambda_nm: float, delta_t_ns: float, omega_fov_sr: float, a_R_cm: float, B_sky: float) -> float:
-        """Calcula n_B via Eq.(32) e atualiza a fonte. Retorna n_B calculado."""
-        n_B = n_background(wavelength_nm, delta_lambda_nm, delta_t_ns, omega_fov_sr, a_R_cm, B_sky)
-        self.set_n_B(n_B)
-        return n_B
+    #def update_from_params(self, wavelength_nm: float, delta_lambda_nm: float, delta_t_ns: float, omega_fov_sr: float, a_R_cm: float, B_sky: float) -> float:
+    #    """Calcula n_B via Eq.(32) e atualiza a fonte. Retorna n_B calculado."""
+    #    n_B = n_background(wavelength_nm, delta_lambda_nm, delta_t_ns, omega_fov_sr, a_R_cm, B_sky)
+    #    self.set_n_B(n_B)
+    #    return n_B
+    

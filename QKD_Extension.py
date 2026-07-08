@@ -1,4 +1,5 @@
 import math
+from datetime import datetime, timezone, timedelta
 import time
 import os
 import warnings
@@ -617,7 +618,7 @@ def run_simulation():
     # Frequency and wavelength from
     # 'THORLABS. DBR78TK, DBR79TK Low-Noise Laser Systems: user guide.
     #  Rev. B.: Thorlabs, Inc., 2025. Documento DOC-102639.'
-    wavelength = 780e-9       # nm
+    wavelength = 780e-9       # m
     frequency  = 8e6          # Hz
     ls_params     = {"frequency": frequency, "wavelength": wavelength, "mean_photon_num": 1}
     # mean_photon_num for COW from
@@ -646,8 +647,8 @@ def run_simulation():
     site_altitude = 720.0             # m ASL — só p/ wind_speed_perp (jato)
     latitude      = math.radians(-23.5615)   # LARC/EPUSP
     longitude     = math.radians(-46.7311)
-    sunrise = 6.798888
-    sunset  = 19.890555         # Sunset/sunrise on Feb 04, 2014 (Crepúsculo tipo -0.833º)
+    sunrise = 6.7833
+    sunset  = 19.8833         # Sunset/sunrise on Feb 04, 2015 (Crepúsculo tipo -0.833º)
 
     friction_velocity = f_velocity(wind_speed, T_classification=7, height_ag=height_link)      # m/s
     viscosity = viscosity_sutherland(temperature)
@@ -682,11 +683,13 @@ def run_simulation():
         "detection_gate":   detection_gate_from_detector(time_resolution), # s
         "fov_solid_angle":  2*math.pi*(1 - math.cos(math.atan(diameter_sensor/(2*focal_distance)))), # sr
         "receiver_radius":  loss_parameters["receiver_radius"],   # m
-        "B_sky":            b_sky_at(datetime(2014, 2, 4, 15, 0, tzinfo=timezone.utc), latitude, longitude, 780e-9, pressure=pressure),
+        "B_sky":            b_sky_at(datetime(2015, 2, 4, 15, 0, tzinfo=timezone.utc), latitude, longitude, ls_params["wavelength"], pressure=pressure), # **
     }
     # **First approximation adopted of 'PIRANDOLA, S. Limits and security of free-space quantum 
     #   communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021'
     #   A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
+
+    extra_kwargs = None   # (antes: {'polarization': 'H'}; parametro removido)
 
     # -- Common kwargs reused by every variable-sweep
     common = dict(
@@ -725,7 +728,8 @@ def run_simulation():
     df = pd.read_csv("sensores/estação-solar-usp_Tabela01.dat", sep=',', skiprows=4, header=None, decimal='.', low_memory=False)
     df[0] = pd.to_datetime(df[0], format="%Y-%m-%d %H:%M:%S")
     diurnp_fn = partial(diurnal_profile, sunrise=sunrise, sunset=sunset,
-                     link_altitude_m=link_altitude_m, date="2015-02-04", dataframe=df)
+                     site_altitude=site_altitude, latitude=latitude, longitude=longitude,
+                     local_tz=timezone(timedelta(hours=-2)), date="2015-02-04", dataframe=df)
     
     sim_scenario(
         label="hour",
