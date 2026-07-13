@@ -145,7 +145,7 @@ def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
     )
     
     encoding = detector.owner.encoding if hasattr(detector.owner, "encoding") else None
-    src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
+    #src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
     src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding, detection_gate=thermal_params["detection_gate"])
     src.init()
     src.add_receiver(detector)
@@ -414,7 +414,8 @@ def _build_tasks(points, point_to_spec, *, runtime, channel_parameters,
         for proto in protocols:
             cfg = PROTOCOL_REGISTRY[proto]
             ls_p  = {**ls_lookup[cfg["ls_key"]], **(ls_over or {})}
-            det_p = det_lookup[cfg["det_key"]]
+            #det_p = det_lookup[cfg["det_key"]]
+            det_p = spec.get("detector_params", det_lookup[cfg["det_key"]])
 
             kwargs = _build_task_kwargs(
                 distance=distance, keysize=keysize,
@@ -542,15 +543,94 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
     det_lookup = {"detector_params": detector_params,
                   "detector_params_cow": detector_params_cow}
 
+    #def point_to_spec(val):
+    #    spec = {"sweep_var": sweep_var, "sweep_val": val}
+    #    if sweep_var == "distance":
+    #        spec["distance"] = val
+    #    elif sweep_var == "keysize":
+    #        spec["keysize"] = val
+    #    else:
+    #        # Any other run_qkd_simulation kwarg -- forwarded by name.
+    #        spec["kwarg_override"] = {sweep_var: val}
+    #    return spec
+    
+        
     def point_to_spec(val):
-        spec = {"sweep_var": sweep_var, "sweep_val": val}
+
+        spec = {
+            "sweep_var": sweep_var,
+            "sweep_val": val
+        }
+
+        # cópias para não alterar os parâmetros base
+        lp = dict(loss_parameters)
+        tp = dict(thermal_params)
+        ls_overrides = {}
+        det_override = None
+
         if sweep_var == "distance":
             spec["distance"] = val
         elif sweep_var == "keysize":
             spec["keysize"] = val
-        else:
-            # Any other run_qkd_simulation kwarg -- forwarded by name.
+        elif sweep_var in [
+            "attenuation",
+            "polarization_fidelity",
+            "eve_intercept_rate",
+            "eve_position",
+            "interferometer_phase_error",
+            "phase_noise_coefficient",
+        ]:
             spec["kwarg_override"] = {sweep_var: val}
+
+        elif sweep_var == "frequency":
+            ls_overrides["frequency"] = val
+        elif sweep_var == "efficiency":
+            det_override = []
+            for d in detector_params:
+                x = dict(d)
+                x["efficiency"] = val
+                det_override.append(x)
+            spec["detector_params"] = det_override
+        elif sweep_var == "dark_count":
+            det_override = []
+            for d in detector_params:
+                x = dict(d)
+                x["dark_count"] = val
+                det_override.append(x)
+            spec["detector_params"] = det_override
+        elif sweep_var == "visibility":
+            lp["visibility"] = val
+        elif sweep_var == "C_n2":
+            lp["C_n2"] = val
+        elif sweep_var == "temperature":
+            lp["temperature"] = val
+        elif sweep_var == "pressure":
+            lp["pressure"] = val
+        elif sweep_var == "wind_speed_perp":
+            lp["wind_speed_perp"] = val
+        elif sweep_var == "height_ag":
+            lp["height_ag"] = val
+        elif sweep_var == "receiver_radius":
+            lp["receiver_radius"] = val
+            tp["receiver_radius"] = val
+        elif sweep_var == "precipitation_rate":
+            lp["precipitation_rate"] = val
+        elif sweep_var == "filter_bandwidth":
+            tp["filter_bandwidth"] = val
+        elif sweep_var == "fov_solid_angle":
+            tp["fov_solid_angle"] = val
+        else:
+            raise ValueError(f"Sweep '{sweep_var}' não suportado.")
+
+        if ls_overrides:
+            spec["ls_overrides"] = ls_overrides
+
+        spec["loss_parameters"] = lp
+        spec["thermal_params"] = tp
+
+        if det_override is not None:
+            spec["detector_params"] = det_override
+
         return spec
 
     tasks = _build_tasks(
@@ -715,24 +795,39 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
-    # -- Sweep #1: distance
-    #sim_variable("distance", range(1000, 100001, 1000),
-    #             keysize=10000, **common)
+    sim_variable("distance", range(1000, 100001, 1000),
+                 keysize=10000, **common)
 
-    # -- Sweep #2: keysize
-    #sim_variable("keysize",
-    #             [20, 45, 50, 100, 200, 400, 800, 1600,
-    #              5000, 20000, 40000, 80000, 100000],
-    #             **common)
+    sim_variable("keysize",
+                 [20, 45, 50, 100, 200, 400, 800, 1600,
+                  5000, 20000, 40000, 80000, 100000],
+                 **common)
 
-    # -- Adding a new sweep is a one-liner. Examples:
-    # sim_variable("attenuation", [1e-4, 2e-4, 4e-4, 8e-4],
-    #              keysize=10_000, **common)
-    # sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9],
-    #              keysize=10_000,
-    #              protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
+    sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
+                 
+    sim_variable("efficiency", np.linspace(0.1, 0.2, 0.3, 0.4, 0.5, 0.65, 0.7, 0.8, 0.9, 1), keysize=10000, **common)
+    sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
+    sim_variable("frequency", [1e6,2e6,5e6,8e6,10e6,20e6,50e6], keysize=10000, **common)
+    sim_variable("visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
+    sim_variable("C_n2", [1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
+    sim_variable("temperature", [273,282,293,303,308,313], keysize=10000, **common)
+    sim_variable("pressure", [80000,85000,90000,92700, 95000,100000], keysize=10000, **common)
 
-    # -- Sweep #3: scenario by hour of day.
+    wind_values = [wind_speed_perp(site_altitude,v) for v in [0.1,2,5,10,15,20]]
+
+    sim_variable("wind_speed_perp", wind_values, keysize=10000, **common)
+    sim_variable("height_ag", [2,5,8,10,20,50], keysize=10000, **common)
+    sim_variable("receiver_radius", [0.025,0.05,0.075,0.10,0.15], keysize=10000, **common)
+    sim_variable("filter_bandwidth", [0.1e-9,0.2e-9,0.5e-9,1e-9,2e-9,5e-9,10e-9], keysize=10000, **common)
+    sim_variable("fov_solid_angle", np.linspace(1e-9,1e-6,20), keysize=10000, **common)
+    
+    mmh = 2.7778e-7
+
+    sim_variable("precipitation_rate", [0.1*mmh, 1*mmh, 5*mmh, 10*mmh, 20*mmh, 30*mmh], keysize=10000, **common)
+    sim_variable("interferometer_phase_error", np.linspace(0,0.2,0.5,0.8,1.1), keysize=10000, protocols=["COW","COW+Eve"], **common)
+    sim_variable("eve_position", np.linspace(0.1,0.3,0.5,0.7,0.9), keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
+
+    # -- Sweep #n: scenario by hour of day.
     # Bind site-specific parameters (sunrise/sunset/altitude) once via
     # functools.partial, leaving only the (token, base_loss_parameters,
     # base_thermal_params, ls_params) signature that sim_scenario expects.
