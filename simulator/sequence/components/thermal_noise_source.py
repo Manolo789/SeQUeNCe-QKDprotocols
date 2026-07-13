@@ -79,23 +79,41 @@ class ThermalNoiseSource(Entity):
         self.detection_gate = detection_gate
         self.active = True
 
-        # CORREÇÃO: n_B (Pirandola PRR 3, 023130, Eq. 32) é definido
+        # CORREÇÃO (v2): n_B (Pirandola PRR 3, 023130, Eq. 32) é definido
         # por MODO temporal de duração detection_gate (o Delta_t usado em
-        # n_background). Para um emissor uniforme no tempo, a taxa física
-        # que reproduz <n_B> fótons em qualquer janela de 1 gate é:
-        #     lambda = n_B / detection_gate   [fótons/s]
-        # O modelo antigo (n_B * frequency) subestimava o fundo pelo fator
-        # período/gate (~125x no cenário-base: 125 us / 1 ns).
-        if detection_gate is not None and detection_gate > 0:
-            self._arrival_rate = n_B / detection_gate
-        else:
+        # n_background). Um emissor de céu é de fato uniforme no tempo com
+        # taxa bruta lambda_raw = n_B / detection_gate, MAS o receptor QKD
+        # aplica filtragem temporal: só o gate (~1 ns) centrado em cada
+        # pulso (período 1/frequency, ~125 ns) é aceito. Como o Detector do
+        # simulador NÃO possui gate temporal (aceita fótons em qualquer
+        # instante do período), o gate precisa ser aplicado AQUI, na fonte,
+        # via ciclo de trabalho (detection_gate * frequency):
+        #     lambda = (n_B / detection_gate) * (detection_gate * frequency)
+        #            = n_B * frequency          [fótons/s DETECTÁVEIS]
+        # A versão anterior (n_B / detection_gate) injetava TODO o fundo
+        # bruto num detector sem gate: superestimava as contagens pelo
+        # fator período/gate (~125x no cenário-base), saturava o dead time
+        # do detector (QBER ~ 0.3) e multiplicava por ~125x o número de
+        # eventos da timeline, travando as varreduras paralelas.
+        self._recompute_rate()
+
+    def _recompute_rate(self) -> None:
+        """(Re)calcula a taxa efetiva de fótons de fundo detectáveis."""
+        if self.frequency is not None and self.frequency > 0:
+            # Modelo gateado: n_B fótons por gate x frequency gates/s.
+            self._arrival_rate = self.n_B * self.frequency
+        elif self.detection_gate is not None and self.detection_gate > 0:
+            # Sem frequência de referência: fundo bruto, sem gate.
             import warnings
             warnings.warn(
-                "ThermalNoiseSource sem detection_gate: usando taxa legada "
-                "n_B*frequency, que subestima o fundo (fator período/gate). "
-                "Passe detection_gate (s) usado no cálculo de n_B.",
+                "ThermalNoiseSource sem frequency: usando taxa bruta "
+                "n_B/detection_gate (sem gate temporal). O detector do "
+                "simulador nao possui gate; as contagens de fundo serao "
+                "superestimadas pelo fator periodo/gate.",
                 RuntimeWarning)
-            self._arrival_rate = n_B * frequency
+            self._arrival_rate = self.n_B / self.detection_gate
+        else:
+            self._arrival_rate = 0.0
 
     def init(self) -> None:
         """Agenda o primeiro evento de emissão de fóton de fundo."""
@@ -167,7 +185,8 @@ class ThermalNoiseSource(Entity):
     def set_n_B(self, n_B: float) -> None:
         """Atualiza n_B em tempo de execução (ex: transição noite→dia)."""
         self.n_B = n_B
-        self._arrival_rate = n_B * self.frequency
+        self._recompute_rate()   # mesma regra do construtor (antes usava
+                                 # sempre n_B*frequency, inconsistente)
 
     #def update_from_params(self, wavelength_nm: float, delta_lambda_nm: float, delta_t_ns: float, omega_fov_sr: float, a_R_cm: float, B_sky: float) -> float:
     #    """Calcula n_B via Eq.(32) e atualiza a fonte. Retorna n_B calculado."""

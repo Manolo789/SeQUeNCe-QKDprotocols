@@ -3,7 +3,8 @@ from datetime import datetime, timezone, timedelta
 import time
 import os
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import (ProcessPoolExecutor, as_completed, wait, FIRST_COMPLETED)
+
 from functools import partial
 
 import numpy as np
@@ -488,19 +489,36 @@ def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers):
           f"({len(sweep_values)} {label}s x {len(protocols)} protocols)")
 
     results = []
+    t_start = time.time()
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_worker, t): t for t in tasks}
-        for i, future in enumerate(as_completed(futures), 1):
-            t = futures[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                proto, val = t["protocol"], t["sweep_val"]
-                print(f"\n[parallel] WARNING: {proto} @ {label}={val} "
-                      f"failed: {exc}")
-                results.append(_fallback_result(proto, label, val))
-            print(f"\r[parallel] {i}/{total} done ({i/total*100:.1f}%)",
-                  end="", flush=True)
+        pending, i = set(futures), 0
+        while pending:
+            # Heartbeat: acorda a cada 30 s mesmo sem tarefa concluída,
+            # para o usuário distinguir "trabalhando" de "travado".
+            done, pending = wait(pending, timeout=30,
+                                 return_when=FIRST_COMPLETED)
+            if not done:
+                print(f"\r[parallel] {i}/{total} done; "
+                      f"{min(max_workers, len(pending))} running; "
+                      f"elapsed {time.time() - t_start:.0f}s",
+                      end="", flush=True)
+                continue
+            for future in done:
+                i += 1
+                t = futures[future]
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    proto, val = t["protocol"], t["sweep_val"]
+                    print(f"\n[parallel] WARNING: {proto} @ {label}={val} "
+                          f"failed: {exc}")
+                    results.append(_fallback_result(proto, label, val))
+                print(f"\r[parallel] {i}/{total} done ({i/total*100:.1f}%), "
+                      f"elapsed {time.time() - t_start:.0f}s",
+                      end="", flush=True)
+
+
     print()
 
     metrics = _collect_results(label, sweep_values, results, protocols)
@@ -805,7 +823,7 @@ def run_simulation():
 
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
                  
-    sim_variable("efficiency", np.linspace(0.1, 0.2, 0.3, 0.4, 0.5, 0.65, 0.7, 0.8, 0.9, 1), keysize=10000, **common)
+    sim_variable("efficiency", np.linspace(0.1,0.9,15), keysize=10000, **common)
     sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
     sim_variable("frequency", [1e6,2e6,5e6,8e6,10e6,20e6,50e6], keysize=10000, **common)
     sim_variable("visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
@@ -824,8 +842,8 @@ def run_simulation():
     mmh = 2.7778e-7
 
     sim_variable("precipitation_rate", [0.1*mmh, 1*mmh, 5*mmh, 10*mmh, 20*mmh, 30*mmh], keysize=10000, **common)
-    sim_variable("interferometer_phase_error", np.linspace(0,0.2,0.5,0.8,1.1), keysize=10000, protocols=["COW","COW+Eve"], **common)
-    sim_variable("eve_position", np.linspace(0.1,0.3,0.5,0.7,0.9), keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
+    sim_variable("interferometer_phase_error", np.linspace(0,1.1,20), keysize=10000, protocols=["COW","COW+Eve"], **common)
+    sim_variable("eve_position", np.linspace(0.1,0.9,9), keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
 
     # -- Sweep #n: scenario by hour of day.
     # Bind site-specific parameters (sunrise/sunset/altitude) once via
