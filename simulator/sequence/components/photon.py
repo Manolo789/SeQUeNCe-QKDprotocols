@@ -23,7 +23,7 @@ class Photon:
 
     Attributes:
         name (str): label for photon instance.
-        wavelength (float): wavelength of photon (in nm).
+        wavelength (float): wavelength of photon (in m).
         location (Entity): current location of photon.
         encoding_type (dict[str, Any]): encoding type of photon (as defined in encoding module).
         quantum_state (int | tuple[complex]): quantum state of photon.
@@ -50,7 +50,7 @@ class Photon:
         Args:
             name (str): name of the photon instance.
             timeline (Timeline): simulation timeline reference
-            wavelength (int): wavelength of photon (in nm) (default 0).
+            wavelength (int): wavelength of photon (in m) (default 0).
             location (Entity): location of the photon (default None).
             encoding_type (dict[str, Any]): encoding type of photon (from encoding module) (default polarization).
             quantum_state (int | tuple[complex]):
@@ -65,7 +65,7 @@ class Photon:
 
         self.name: str = name
         self.timeline = timeline
-        self.wavelength: int = wavelength
+        self.wavelength: float = wavelength
         self.location: Entity = location
         self.encoding_type: dict[str, Any] = encoding_type
         self.is_null: bool = False

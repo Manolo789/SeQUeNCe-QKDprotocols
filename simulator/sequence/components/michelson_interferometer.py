@@ -284,6 +284,11 @@ class MichelsonInterferometer(Entity):
 
         Optional Gaussian phase noise (``phase_error`` > 0) models imperfect
         thermal stabilisation or laser linewidth.
+        
+        Note: phenomenological model — the "stored" photon is not routed 
+        (2 photons enter, 1 exits) and there are no satellite peaks; visibility 
+        (ratio regarding interference events) remains unbiased, but the ABSOLUTE 
+        COUNTS from DM1/DM2 should not feed into monitor rate metrics.
 
         Args:
             photon (Photon): the arriving short-arm photon that triggers the

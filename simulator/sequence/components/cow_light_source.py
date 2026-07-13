@@ -66,7 +66,7 @@ class COWLightSource(LightSource):
         name: str,
         timeline,
         frequency: float = 8e6,
-        wavelength: float = 780,
+        wavelength: float = 780e-9,
         bandwidth: float = 0,
         mean_photon_num: float = 0.5,
         encoding_type: dict = None,
@@ -78,9 +78,9 @@ class COWLightSource(LightSource):
         Args:
             name (str): component label.
             timeline (Timeline): simulation timeline.
-            frequency (float): clock frequency in Hz (default 434 MHz as in
-                Stucki et al.).
-            wavelength (float): photon wavelength in nm (default 1550).
+            frequency (float): clock frequency in Hz (default 8e6 Hz; 
+                434 MHz é o clock do experimento original de Stucki 2005).
+            wavelength (float): photon wavelength in m (default 780e-9).
             bandwidth (float): linewidth standard deviation in nm (default 0).
             mean_photon_num (float): mean photon number μ per pulse slot
                 (default 0.5, as used in the COW experiment).

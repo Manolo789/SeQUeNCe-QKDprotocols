@@ -59,7 +59,7 @@ class SinglePhotonSource(LightSource):
     inherited from :class:`LightSource`.
     """
 
-    def __init__(self, name, timeline, frequency=8e7, wavelength=1550,
+    def __init__(self, name, timeline, frequency=8e7, wavelength=1550e-9,
                  bandwidth=0, mean_photon_num=1.0, encoding_type=polarization,
                  phase_error=0):
         super().__init__(name, timeline, frequency, wavelength, bandwidth,

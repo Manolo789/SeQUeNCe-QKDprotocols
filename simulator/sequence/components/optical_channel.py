@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from ..topology.node import Node, EveNode
     from ..components.photon import Photon
     from ..message import Message
+    from QCLoss.loss import AtmosphericPhaseProcess
 
 from ..kernel.entity import Entity
 from ..kernel.event import Event
@@ -98,11 +99,15 @@ class QuantumChannel(OpticalChannel):
             for a channel of length L is σ_φ = phase_noise_coefficient × √L.
             Default 0.0 (no channel phase noise).
             Typical value: 0.005–0.02 rad/√m for standard telecom fiber.
+            Observation: Atmospheric turbulence enters exclusively via atmospheric_phase_process 
+            (constructed from loss_parameters). Never populate this parameter with phase_noise() 
+            from QCLoss/loss.py when loss_parameters is present—doing so double-counts the turbulence.
 
     """
 
     def __init__(self, name: str, timeline: "Timeline", attenuation: float, distance: float,
-                 polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, phase_noise_coefficient: float = 0.0):
+                 polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, phase_noise_coefficient: float = 0.0,
+                 loss: "float | None" = None, atmospheric_phase_process: "Optional[AtmosphericPhaseProcess]" = None):
         """Constructor for Quantum Channel class.
 
         Args:
@@ -125,13 +130,18 @@ class QuantumChannel(OpticalChannel):
         self.frequency: float = frequency  # maximum frequency for sending qubits (measured in Hz)
         self.send_bins: list = []
         self.phase_noise_coefficient: float = phase_noise_coefficient
-
+        self._loss_spec = loss  # None → default formula, float → fixed
+        self.atmospheric_phase_process = atmospheric_phase_process
 
     def init(self) -> None:
         """Implementation of Entity interface (see base class)."""
 
         self.delay = round(self.distance / self.light_speed)
-        self.loss = 1 - 10 ** (self.distance * self.attenuation / -10)
+        if self._loss_spec is None:
+            self.loss = 1 - 10 ** (self.distance * self.attenuation / -10)
+        else:
+            self.loss = float(self._loss_spec)
+        
 
     def set_ends(self, sender: "Node", receiver: str) -> None:
         """Method to set endpoints for the quantum channel.
@@ -155,6 +165,12 @@ class QuantumChannel(OpticalChannel):
         For time_bin_cow encoding: random phase noise that degrades
         coherence between consecutive pulses in the Michelson
         interferometer on the monitoring line.
+        
+        Phenomenological knob inherited from the FIBRA case; in an 
+        FSO link, the medium is already covered by the 
+        `atmospheric_phase_process`. If used for laser linewidth and physical 
+        mapping—with sigma^2 = 2*pi*dnu*tau (where tau = pulse interval)—it 
+        is not proportional to distance.
 
         The phase noise model follows a Wiener process in fiber:
             σ_φ = phase_noise_coefficient × √(distance)
@@ -173,14 +189,20 @@ class QuantumChannel(OpticalChannel):
                 qubit.random_noise(self.get_generator())
 
         elif qubit.encoding_type["name"] == "time_bin_cow":
-            # Channel phase decoherence: each photon accumulates a random
-            # phase proportional to sqrt(fiber length).
-            # This does NOT affect the data line (time-of-arrival is
-            # phase-independent), but it DOES reduce the visibility
-            # measured by the Michelson interferometer.
+            # Level-3 atmospheric piston: temporally correlated process.
+            # Two photons emitted within tau_atm pick up nearly identical
+            # pistons, which cancel in Bob's Michelson interferometer
+            # (the physically correct behaviour).
+            phi = 0.0
+            if self.atmospheric_phase_process is not None:
+                phi += self.atmospheric_phase_process.sample(self.timeline.now())
+
+            # Optional: superimpose laser-linewidth Wiener noise, which IS
+            # independent per photon.  Add the two in quadrature.
             if self.phase_noise_coefficient > 0 and self.distance > 0:
                 sigma_phi = self.phase_noise_coefficient * math.sqrt(self.distance)
-                qubit.channel_phase = float(rng.normal(0.0, sigma_phi))
+                phi += float(rng.normal(0.0, sigma_phi))
+            qubit.channel_phase = phi
 
 
 
@@ -228,12 +250,9 @@ class QuantumChannel(OpticalChannel):
 
             if qubit.is_null:
                 qubit.add_loss(self.loss)
-                
-            
 
             # ── Apply channel noise (polarization OR phase decoherence) ──
             self._apply_channel_noise(qubit)
-
 
             # schedule receiving node to receive photon at future time determined by light speed
             future_time = self.timeline.now() + self.delay
@@ -332,7 +351,8 @@ class EveQuantumChannel(QuantumChannel):
     """
 
     def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
-        polarization_fidelity: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0) -> None:
+        pf_seg1: float = 1.0, pf_seg2: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, phase_noise_coefficient_seg2: "float | None" = None,
+        loss_seg1: "float | None" = None, loss_seg2: "float | None" = None, atmospheric_phase_process: "Optional[AtmosphericPhaseProcess]" = None, atmospheric_phase_process_seg2: "Optional[AtmosphericPhaseProcess]" = None) -> None:
         """
         Args:
             name:                 nome do canal.
@@ -351,15 +371,20 @@ class EveQuantumChannel(QuantumChannel):
             name, timeline,
             attenuation=attenuation,
             distance=dist_seg1,
-            polarization_fidelity=polarization_fidelity,
+            polarization_fidelity=pf_seg1,
             light_speed=light_speed,
             frequency=frequency,
             phase_noise_coefficient=phase_noise_coefficient,
+            loss=loss_seg1, atmospheric_phase_process=atmospheric_phase_process,
         )
         self.eve_node: "EveNode" = eve_node
         self.eve_position: float = eve_position
+        self.loss_seg2: "float | None" = loss_seg2
+        self.pf_seg2: float = pf_seg2
         self._total_distance: float = distance
         self._seg2: Optional[QuantumChannel] = None   # criado em init()
+        self._atm_proc_seg2 = atmospheric_phase_process_seg2
+        self._phase_noise_coef_seg2 = (phase_noise_coefficient if phase_noise_coefficient_seg2 is None else phase_noise_coefficient_seg2)
 
     # ── QuantumChannel interface ──────────────────────────────────────────
 
@@ -391,10 +416,11 @@ class EveQuantumChannel(QuantumChannel):
             self.timeline,
             attenuation=self.attenuation,
             distance=dist_seg2,
-            polarization_fidelity=self.polarization_fidelity,
+            polarization_fidelity=self.pf_seg2,
             light_speed=self.light_speed,
             frequency=self.frequency,
-            phase_noise_coefficient=self.phase_noise_coefficient,
+            phase_noise_coefficient=self._phase_noise_coef_seg2,
+            loss=self.loss_seg2, atmospheric_phase_process=self._atm_proc_seg2,
         )
         # Registra _seg2 em Eve com a chave 'bob'.
         # Eve chamará eve.send_qubit('bob') após intercepção.
