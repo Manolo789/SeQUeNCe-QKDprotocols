@@ -67,7 +67,7 @@ class ThermalNoiseSource(Entity):
         active (bool)    : liga/desliga a fonte
     """
 
-    def __init__(self, name: str, timeline: "Timeline", n_B: float, frequency: float, encoding_type: dict = None) -> None:
+    def __init__(self, name: str, timeline: "Timeline", n_B: float, frequency: float, encoding_type: dict = None, detection_gate: float = None) -> None:
         Entity.__init__(self, name, timeline)
 
         if encoding_type is None:
@@ -76,10 +76,26 @@ class ThermalNoiseSource(Entity):
         self.n_B = n_B
         self.frequency = frequency
         self.encoding_type = encoding_type
+        self.detection_gate = detection_gate
         self.active = True
 
-        # Taxa total de chegada de fótons de fundo [fótons/s]
-        self._arrival_rate = n_B * frequency
+        # CORREÇÃO: n_B (Pirandola PRR 3, 023130, Eq. 32) é definido
+        # por MODO temporal de duração detection_gate (o Delta_t usado em
+        # n_background). Para um emissor uniforme no tempo, a taxa física
+        # que reproduz <n_B> fótons em qualquer janela de 1 gate é:
+        #     lambda = n_B / detection_gate   [fótons/s]
+        # O modelo antigo (n_B * frequency) subestimava o fundo pelo fator
+        # período/gate (~125x no cenário-base: 125 us / 1 ns).
+        if detection_gate is not None and detection_gate > 0:
+            self._arrival_rate = n_B / detection_gate
+        else:
+            import warnings
+            warnings.warn(
+                "ThermalNoiseSource sem detection_gate: usando taxa legada "
+                "n_B*frequency, que subestima o fundo (fator período/gate). "
+                "Passe detection_gate (s) usado no cálculo de n_B.",
+                RuntimeWarning)
+            self._arrival_rate = n_B * frequency
 
     def init(self) -> None:
         """Agenda o primeiro evento de emissão de fóton de fundo."""
@@ -109,6 +125,11 @@ class ThermalNoiseSource(Entity):
             encoding_type = self.encoding_type,
             quantum_state = state,
         )
+        # CORREÇÃO: luz térmica tem fase aleatória — sem coerência com
+        # os pulsos do sinal. Marca o fóton como incoerente para que pares
+        # acidentais (sinal, fundo) no Michelson roteiem 50/50 em vez de
+        # interferir com fase determinística (channel_phase=0).
+        photon.coherent = False
         # Fóton real → passa pela eficiência η_eff do Detector
         self._receivers[0].get(photon)
 

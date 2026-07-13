@@ -99,7 +99,8 @@ class B92Message(Message):
         light_time (float): lenght of time to send qubits (if `msg_type == BEGIN_PHOTON_PULSE`).
         start_time (int): simulation start time of qubit pulse (if `msg_type == BEGIN_PHOTON_PULSE`).
         wavelength (float): wavelength (in m) of photons (if `msg_type == BEGIN_PHOTON_PULSE`).
-        bases (list[int]): list of measurement bases (if `msg_type == BASIS_LIST`).
+        bases (list[int]): payload vazio de sincronização (BASIS_LIST). Nunca envie as bases de 
+            Alice: neste esquema base == bit.
         indices (list[int]): list of indices for matching bases (if `msg_type == MATCHING_INDICES`).
     """
 
@@ -394,23 +395,30 @@ class B92(StackProtocol):
 
             elif msg.msg_type is B92MsgType.RECEIVED_QUBITS:  # (Current node is Alice): can send basis
                 log.logger.debug(self.name + " received RECEIVED_QUBITS message")
-                bases = self.basis_lists.pop(0)
-                message = B92Message(B92MsgType.BASIS_LIST, self.another.name, bases=bases)
+                # CORREÇÃO: nesta codificação (estados bases[b][b]),
+                # base == bit — enviar as bases de Alice publicaria a chave
+                # em claro no canal clássico. O peneiramento do B92 não usa
+                # nenhuma informação de Alice (Bob filtra por resultado
+                # conclusivo), então a mensagem vira pura sincronização.
+                self.basis_lists.pop(0)   # mantem a FIFO alinhada
+                message = B92Message(B92MsgType.BASIS_LIST, self.another.name, bases=[])
                 self.owner.send_message(self.another.owner.name, message)
 
             elif msg.msg_type is B92MsgType.BASIS_LIST:  # (Current node is Bob): compare bases
                 log.logger.debug(self.name + " received BASIS_LIST message")
-                # parse alice basis list
-                basis_list_alice = msg.bases
-
-                # Compare the base itself with the bit list and create a list of corresponding indices
+                # msg.bases agora é payload vazio (sincronização).
+                # Peneiramento conclusivo do B92 usa apenas dados LOCAIS de
+                # Bob: conserva i quando houve detecção (r != -1) e o
+                # resultado difere da base medida (r != m):
+                #   mede Z (m=0), obtem |V> (r=1) -> Alice enviou |->  -> bit 1
+                #   mede X (m=1), obtem |+> (r=0) -> Alice enviou |H>  -> bit 0
                 indices = []
                 basis_list = self.basis_lists.pop(0)
                 bits = self.bit_lists.pop(0)
-                for i, b in enumerate(basis_list_alice):
-                    if bits[i] != -1 and basis_list[i] != bits[i]:
+                for i, (m, r) in enumerate(zip(basis_list, bits)):
+                    if r != -1 and m != r:
                         indices.append(i)
-                        self.key_bits.append(bits[i])
+                        self.key_bits.append(r)
                     
 
                 # send to Alice list of matching indices

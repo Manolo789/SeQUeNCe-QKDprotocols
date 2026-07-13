@@ -554,6 +554,8 @@ class QKDNode(Node):
         elif encoding["name"] == "time_bin_cow":
             # Replace the generic QSDetector with QSDetectorCOW
             path_diff = slot_period_ps(lightsource.frequency)
+            # t_B=0.58 é escolha do projeto (Stucki 2005 usa ~0.9 p/ a
+            # linha de dados); não configurável via detector_params por ora.
             qsdetector = QSDetectorCOW(qsd_name, timeline, path_diff=path_diff, t_B=0.58)
         else:
             raise Exception("invalid encoding {} given for QKD node {}".format(encoding["name"], name))

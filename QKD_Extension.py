@@ -146,6 +146,7 @@ def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
     
     encoding = detector.owner.encoding if hasattr(detector.owner, "encoding") else None
     src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
+    src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding, detection_gate=thermal_params["detection_gate"])
     src.init()
     src.add_receiver(detector)
     tl.entities[src.name] = src
@@ -178,12 +179,22 @@ def _setup_atm_processes(is_cow, has_eve, loss_parameters, ls_params, distance, 
     return atm_ab, None
 
 
-def _configure_bob_cow_interferometer(bob, interferometer_phase_error):
-    """Set the Michelson phase error on Bob's QSDetectorCOW (if present)."""
+def _configure_bob_cow_interferometer(bob, interferometer_phase_error, ls_frequency=None):
+    """Set the Michelson phase error AND path difference on Bob's QSDetectorCOW.
+
+    CORREÇÃO: o path_diff é calculado no construtor do QKDNode com a
+    frequência DEFAULT da fonte, antes de update_lightsource_params. Aqui
+    ele é ressincronizado com a frequência efetiva da fonte de Alice; sem
+    isso, mudar ls_params_cow['frequency'] dessincroniza fonte e
+    interferômetro (zero eventos de interferencia -> V=NaN -> SKR=0).
+    """
     from sequence.components.qsdetector_cow import QSDetectorCOW
+    from sequence.utils.encoding_cow import slot_period_ps
     for comp in bob.components.values():
         if isinstance(comp, QSDetectorCOW):
             comp.interferometer.phase_error = interferometer_phase_error
+            if ls_frequency is not None:
+                comp.interferometer.path_difference = slot_period_ps(ls_frequency)
             return
 
 
@@ -288,7 +299,7 @@ def run_qkd_simulation(
             bob.update_detector_params(i, k, v)
 
     if is_cow:
-        _configure_bob_cow_interferometer(bob, interferometer_phase_error)
+        _configure_bob_cow_interferometer(bob, interferometer_phase_error, ls_params["frequency"])
 
     qc0.set_ends(alice, bob.name)
     qc1.set_ends(bob, alice.name)

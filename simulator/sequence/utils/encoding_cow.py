@@ -120,7 +120,7 @@ X_MINUS_STATE: np.ndarray = array([complex(1 / sqrt(2)), complex(-1 / sqrt(2))])
 
 #: Default slot period in ps (corresponds to 434 MHz from Stucki et al.).
 #_DEFAULT_BIN_SEPARATION: int = round(1e12 / 434e6)   # ≈ 2304 ps
-_DEFAULT_BIN_SEPARATION = 1400   # ≈ 2304 ps
+_DEFAULT_BIN_SEPARATION = 1400  # [I3] MEIA-JANELA de aceitação (+-700 ps) em torno de cada slot; a separação early/late real é o periodo do slot (1e12/f)
 
 time_bin_cow: dict = {
     # ---- required by SeQUeNCe infrastructure ----

@@ -165,6 +165,12 @@ class QuantumChannel(OpticalChannel):
         For time_bin_cow encoding: random phase noise that degrades
         coherence between consecutive pulses in the Michelson
         interferometer on the monitoring line.
+        
+        Phenomenological knob inherited from the FIBRA case; in an 
+        FSO link, the medium is already covered by the 
+        `atmospheric_phase_process`. If used for laser linewidth and physical 
+        mapping—with sigma^2 = 2*pi*dnu*tau (where tau = pulse interval)—it 
+        is not proportional to distance.
 
         The phase noise model follows a Wiener process in fiber:
             σ_φ = phase_noise_coefficient × √(distance)
