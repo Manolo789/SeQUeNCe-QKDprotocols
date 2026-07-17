@@ -809,7 +809,7 @@ def run_simulation():
     #   communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021'
     #   A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
 
-    extra_kwargs = None   # (antes: {'polarization': 'H'}; parametro removido)
+    extra_kwargs = None   # (antes: {'polarization': 'H'}; parâmetro removido)
 
     # -- Common kwargs reused by every variable-sweep
     common = dict(
@@ -851,7 +851,7 @@ def run_simulation():
     sim_variable("height_ag", [2,5,8,10,20,50], keysize=10000, **common)
     sim_variable("receiver_radius", [0.025,0.05,0.075,0.10,0.15], keysize=10000, **common)
     sim_variable("filter_bandwidth", [0.1e-9,0.2e-9,0.5e-9,1e-9,2e-9,5e-9,10e-9], keysize=10000, **common)
-    sim_variable("fov_solid_angle", np.linspace(1e-10,1e-6,20), keysize=10000, **common)
+    sim_variable("fov_solid_angle", [1e-11,1e-10,1e-9,1e-8,1e-7], keysize=10000, **common)
     
     mmh = 2.7778e-7
 
