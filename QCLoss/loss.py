@@ -371,13 +371,14 @@ def rain_attenuation_carbonneau(precipitation_rate: float) -> float:
 # ===========================================================================
 # 4. Nevoeiro/aerossóis (Kim) e ruído de fase — interfaces em SI
 # ===========================================================================
-def fog_extinction_kim(visibility: float, wavelength: float) -> float:
+def fog_extinction_kim(atm_visibility: float, wavelength: float) -> float:
     """Coeficiente de extinção por nevoeiro/névoa β [1/m], modelo de Kim.
 
-    Args (SI): visibility [m], wavelength [m].
+    Args (SI): atm_visibility [m] (visibilidade meteorológica/atmosférica;
+    não confundir com a visibilidade do interferômetro do COW), wavelength [m].
     Internamente V→km e λ→nm, como publicado em [Kim01].
     """
-    V_km = visibility * 1e-3                     # m → km (conversão SI)
+    V_km = atm_visibility * 1e-3                 # m → km (conversão SI)
     lam_nm = wavelength * 1e9                    # m → nm (conversão SI)
     if V_km > 50:
         q = 1.6
@@ -406,7 +407,7 @@ def phase_noise(wavelength: float, C_n2: float, height_ag: float) -> float:
 # ===========================================================================
 # 5. Perda total do canal FSO
 # ===========================================================================
-def channel_FSO_loss(distance: float, wavelength: float, visibility: float,
+def channel_FSO_loss(distance: float, wavelength: float, atm_visibility: float,
                      receiver_radius: float, pressure: float,
                      temperature: float, w_0: float, R_0: float,
                      friction_velocity: float, height_ag: float,
@@ -420,7 +421,7 @@ def channel_FSO_loss(distance: float, wavelength: float, visibility: float,
     Args:
         distance            [m]     comprimento do enlace
         wavelength          [m]     (ex.: 780e-9)
-        visibility          [m]     visibilidade meteorológica
+        atm_visibility      [m]     visibilidade meteorológica (atmosférica)
         receiver_radius     [m]     raio da abertura do receptor
         pressure            [Pa]    Pressão atmosférica
         temperature         [K]     Temperatura do ar
@@ -441,7 +442,7 @@ def channel_FSO_loss(distance: float, wavelength: float, visibility: float,
     l0 = inner_scale(temperature, pressure, friction_velocity, height_ag)
 
     # --- nevoeiro/aerossóis (Kim) --------------------------------------
-    eta_fog = math.exp(-fog_extinction_kim(visibility, wavelength) * distance)
+    eta_fog = math.exp(-fog_extinction_kim(atm_visibility, wavelength) * distance)
 
     # --- turbulência: alargamento de longo prazo [GP22, AP05] ----------
     if C_n2 is None:

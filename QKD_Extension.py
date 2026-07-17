@@ -69,6 +69,12 @@ _METRIC_COLS = [
 ]
 _VIS_COL = ("Visibility", "visibility")
 
+# Chaves reservadas do dicionário de resultado de _worker. Um sweep_var com
+# um destes nomes colidiria com uma métrica e apagaria (NaN) as colunas do
+# protocolo no CSV (caso histórico: sweep "visibility" [atmosférica] vs.
+# métrica "visibility" [interferômetro do COW]).
+_RESERVED_RESULT_KEYS = ({"protocol"} | {k for _, k in _METRIC_COLS} | {_VIS_COL[1]})
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Metric helpers
@@ -481,6 +487,11 @@ def _collect_results(sweep_var, sweep_values, results_list, protocols):
 def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers):
     """Execute the task list in parallel, build the wide-format metrics
     table and save it as CSV. Returns the metrics dict."""
+    if label in _RESERVED_RESULT_KEYS:
+        raise ValueError(
+            f"sweep_var/label {label!r} colide com uma chave reservada de "
+            f"métrica ({sorted(_RESERVED_RESULT_KEYS)}); renomeie o sweep "
+            f"(ex.: visibilidade atmosferica -> 'atm_visibility').")
     if max_workers is None:
         max_workers = os.cpu_count() or 4
 
@@ -616,8 +627,8 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
                 x["dark_count"] = val
                 det_override.append(x)
             spec["detector_params"] = det_override
-        elif sweep_var == "visibility":
-            lp["visibility"] = val
+        elif sweep_var == "atm_visibility":
+            lp["atm_visibility"] = val
         elif sweep_var == "C_n2":
             lp["C_n2"] = val
         elif sweep_var == "temperature":
@@ -771,7 +782,7 @@ def run_simulation():
 
     # -- FSO loss parameters (forwarded as **kwargs to channel_FSO_loss)
     loss_parameters = {
-        "visibility":         10e3,             # m   (Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. 2024. p. 352–374')
+        "atm_visibility":     10e3,             # m   (Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. 2024. p. 352–374')
         "receiver_radius":    0.103,            # m   (sharpstar-optics.com/Products_1/79.html)
         "pressure":           pressure,         # Pa  (labmicro.iag.usp.br/Data/data_PMIAG.html)
         "temperature":        temperature,      # K (labmicro.iag.usp.br/Data/data_PMIAG.html)
@@ -826,7 +837,7 @@ def run_simulation():
     sim_variable("efficiency", np.linspace(0.1,0.9,15), keysize=10000, **common)
     sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
     sim_variable("frequency", [1e6,2e6,5e6,8e6,10e6,20e6,50e6], keysize=10000, **common)
-    sim_variable("visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
+    sim_variable("atm_visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
     sim_variable("C_n2", [1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
     sim_variable("temperature", [273,282,293,303,308,313], keysize=10000, **common)
     sim_variable("pressure", [80000,85000,90000,92700, 95000,100000], keysize=10000, **common)
