@@ -824,11 +824,11 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
-    sim_variable("distance", range(100, 1001, 100),
+    sim_variable("distance", range(100, 2001, 100),
                  keysize=10000, **common)
 
-    sim_variable("distance", range(1000, 100001, 1000),
-                 keysize=10000, **common)
+    #sim_variable("distance", range(1000, 100001, 1000),
+    #             keysize=10000, **common)
 
     sim_variable("keysize",
                  [20, 45, 50, 100, 200, 400, 800, 1600,
