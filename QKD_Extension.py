@@ -824,6 +824,9 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
+    sim_variable("distance", range(100, 1001, 100),
+                 keysize=10000, **common)
+
     sim_variable("distance", range(1000, 100001, 1000),
                  keysize=10000, **common)
 
@@ -834,11 +837,11 @@ def run_simulation():
 
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
                  
-    sim_variable("efficiency", np.linspace(0.1,0.9,15), keysize=10000, **common)
+    sim_variable("efficiency", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0], keysize=10000, **common)
     sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
     sim_variable("frequency", [1e6,2e6,5e6,8e6,10e6,20e6,50e6], keysize=10000, **common)
     sim_variable("atm_visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
-    sim_variable("C_n2", [1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
+    sim_variable("C_n2", [1e-18,1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
     sim_variable("temperature", [273,282,293,303,308,313], keysize=10000, **common)
     sim_variable("pressure", [80000,85000,90000,92700, 95000,100000], keysize=10000, **common)
 
@@ -848,13 +851,13 @@ def run_simulation():
     sim_variable("height_ag", [2,5,8,10,20,50], keysize=10000, **common)
     sim_variable("receiver_radius", [0.025,0.05,0.075,0.10,0.15], keysize=10000, **common)
     sim_variable("filter_bandwidth", [0.1e-9,0.2e-9,0.5e-9,1e-9,2e-9,5e-9,10e-9], keysize=10000, **common)
-    sim_variable("fov_solid_angle", np.linspace(1e-9,1e-6,20), keysize=10000, **common)
+    sim_variable("fov_solid_angle", np.linspace(1e-10,1e-6,20), keysize=10000, **common)
     
     mmh = 2.7778e-7
 
     sim_variable("precipitation_rate", [0.1*mmh, 1*mmh, 5*mmh, 10*mmh, 20*mmh, 30*mmh], keysize=10000, **common)
-    sim_variable("interferometer_phase_error", np.linspace(0,1.1,20), keysize=10000, protocols=["COW","COW+Eve"], **common)
-    sim_variable("eve_position", np.linspace(0.1,0.9,9), keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
+    sim_variable("interferometer_phase_error", [0,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,10.0,100.0], keysize=10000, protocols=["COW","COW+Eve"], **common)
+    sim_variable("eve_position", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9], keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
 
     # -- Sweep #n: scenario by hour of day.
     # Bind site-specific parameters (sunrise/sunset/altitude) once via
