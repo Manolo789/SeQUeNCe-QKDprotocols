@@ -884,9 +884,8 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
-    pd.DataFrame({"Total_execution_time_(seconds)":
-                  [time.time() - start]}
-                 ).to_csv("data/simulator_metrics.csv", index=False)
+    pd.DataFrame({"Total_execution_time_(seconds)": [time.time() - start]}).to_csv("data/simulator_metrics.csv", index=False)
+
 
 if __name__ == "__main__":
     run_simulation()
