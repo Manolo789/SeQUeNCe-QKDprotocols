@@ -35,9 +35,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==================================================================
 
-"""
-
-"""Definition of the BBM92 entanglement-based QKD protocol.
+Definition of the BBM92 entanglement-based QKD protocol.
 
 BBM92 (Bennett-Brassard-Mermin 1992) is the entanglement-based version of
 BB84. An untrusted central source (Charlie) distributes Bell pairs; Alice

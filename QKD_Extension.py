@@ -266,7 +266,7 @@ def run_qkd_simulation(
     source_type=None, loss=None, thermal_params=None,
     phase_noise_coefficient=0, interferometer_phase_error=0.20,
     eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None,
-    num_rounds=20000, f_ec=1.0, bell_state="psi_minus", seed=0,
+    num_rounds=10000, f_ec=1.0, bell_state="psi_minus", seed=0,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
 
@@ -1141,7 +1141,7 @@ def run_simulation():
 
     env = default_environment()
     common = env["common"]
-    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "num_rounds": 5000, "f_ec": 1.1}
+    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "num_rounds": 10000, "f_ec": 1.1}
     site_altitude = env["site"]["site_altitude"]
 
     sim_variable("distance", range(100, 2001, 100),
@@ -1152,7 +1152,12 @@ def run_simulation():
 
     sim_variable("keysize",
                  [20, 45, 50, 100, 200, 400, 800, 1600,
-                  5000, 20000, 40000, 80000, 100000],
+                  5000, 20000, 40000, 80000, 100000], protocols=PREPARE_MEASURE_PROTOCOLS,
+                 **common)
+                 
+    sim_variable("num_rounds",
+                 [20, 45, 50, 100, 200, 400, 800, 1600,
+                  5000, 20000, 40000, 80000, 100000], protocols=ENTANGLEMENT_PROTOCOLS,
                  **common)
 
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
@@ -1194,7 +1199,7 @@ def run_simulation():
         base_loss_parameters=env["loss_parameters"],
         base_thermal_params=env["thermal_params"],
         diurnal_profile_fn=diurnp_fn,
-        extra_kwargs=env["extra_kwargs"],
+        extra_kwargs=common["extra_kwargs"],
     )
 
     pd.DataFrame({"Total_execution_time_(seconds)": [time.time() - start]}).to_csv("data/simulator_metrics.csv", index=False)

@@ -35,9 +35,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==================================================================
 
-"""
-
-"""Shared infrastructure for entanglement-based QKD (BBM92 / E91).
+Shared infrastructure for entanglement-based QKD (BBM92 / E91).
 
 Both protocols share EXACTLY the same physical layer:
 

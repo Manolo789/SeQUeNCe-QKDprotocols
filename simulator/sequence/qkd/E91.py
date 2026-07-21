@@ -35,9 +35,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==================================================================
 
-"""
-
-"""Definition of the E91 (Ekert 1991) entanglement-based QKD protocol.
+Definition of the E91 (Ekert 1991) entanglement-based QKD protocol.
 
 An untrusted central source (Charlie) distributes Bell pairs; Alice and
 Bob each measure their photon with one of THREE analyser angles:
