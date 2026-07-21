@@ -108,8 +108,8 @@ class ThermalNoiseSource(Entity):
             warnings.warn(
                 "ThermalNoiseSource sem frequency: usando taxa bruta "
                 "n_B/detection_gate (sem gate temporal). O detector do "
-                "simulador nao possui gate; as contagens de fundo serao "
-                "superestimadas pelo fator periodo/gate.",
+                "simulador não possui gate; as contagens de fundo serão "
+                "superestimadas pelo fator período/gate.",
                 RuntimeWarning)
             self._arrival_rate = self.n_B / self.detection_gate
         else:

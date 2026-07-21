@@ -69,6 +69,12 @@ _METRIC_COLS = [
 ]
 _VIS_COL = ("Visibility", "visibility")
 
+# Chaves reservadas do dicionário de resultado de _worker. Um sweep_var com
+# um destes nomes colidiria com uma métrica e apagaria (NaN) as colunas do
+# protocolo no CSV (caso histórico: sweep "visibility" [atmosférica] vs.
+# métrica "visibility" [interferômetro do COW]).
+_RESERVED_RESULT_KEYS = ({"protocol"} | {k for _, k in _METRIC_COLS} | {_VIS_COL[1]})
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Metric helpers
@@ -481,6 +487,11 @@ def _collect_results(sweep_var, sweep_values, results_list, protocols):
 def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers):
     """Execute the task list in parallel, build the wide-format metrics
     table and save it as CSV. Returns the metrics dict."""
+    if label in _RESERVED_RESULT_KEYS:
+        raise ValueError(
+            f"sweep_var/label {label!r} colide com uma chave reservada de "
+            f"métrica ({sorted(_RESERVED_RESULT_KEYS)}); renomeie o sweep "
+            f"(ex.: visibilidade atmosferica -> 'atm_visibility').")
     if max_workers is None:
         max_workers = os.cpu_count() or 4
 
@@ -616,8 +627,8 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
                 x["dark_count"] = val
                 det_override.append(x)
             spec["detector_params"] = det_override
-        elif sweep_var == "visibility":
-            lp["visibility"] = val
+        elif sweep_var == "atm_visibility":
+            lp["atm_visibility"] = val
         elif sweep_var == "C_n2":
             lp["C_n2"] = val
         elif sweep_var == "temperature":
@@ -771,7 +782,7 @@ def run_simulation():
 
     # -- FSO loss parameters (forwarded as **kwargs to channel_FSO_loss)
     loss_parameters = {
-        "visibility":         10e3,             # m   (Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. 2024. p. 352–374')
+        "atm_visibility":     10e3,             # m   (Measured using 'WORLD METEOROLOGICAL ORGANIZATION. Guide to Instruments and Methods of Observation. 2024. p. 352–374')
         "receiver_radius":    0.103,            # m   (sharpstar-optics.com/Products_1/79.html)
         "pressure":           pressure,         # Pa  (labmicro.iag.usp.br/Data/data_PMIAG.html)
         "temperature":        temperature,      # K (labmicro.iag.usp.br/Data/data_PMIAG.html)
@@ -798,7 +809,7 @@ def run_simulation():
     #   communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021'
     #   A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
 
-    extra_kwargs = None   # (antes: {'polarization': 'H'}; parametro removido)
+    extra_kwargs = None   # (antes: {'polarization': 'H'}; parâmetro removido)
 
     # -- Common kwargs reused by every variable-sweep
     common = dict(
@@ -813,8 +824,11 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
-    sim_variable("distance", range(1000, 100001, 1000),
+    sim_variable("distance", range(100, 2001, 100),
                  keysize=10000, **common)
+
+    #sim_variable("distance", range(1000, 100001, 1000),
+    #             keysize=10000, **common)
 
     sim_variable("keysize",
                  [20, 45, 50, 100, 200, 400, 800, 1600,
@@ -823,11 +837,11 @@ def run_simulation():
 
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
                  
-    sim_variable("efficiency", np.linspace(0.1,0.9,15), keysize=10000, **common)
+    sim_variable("efficiency", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0], keysize=10000, **common)
     sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
     sim_variable("frequency", [1e6,2e6,5e6,8e6,10e6,20e6,50e6], keysize=10000, **common)
-    sim_variable("visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
-    sim_variable("C_n2", [1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
+    sim_variable("atm_visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
+    sim_variable("C_n2", [1e-18,1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
     sim_variable("temperature", [273,282,293,303,308,313], keysize=10000, **common)
     sim_variable("pressure", [80000,85000,90000,92700, 95000,100000], keysize=10000, **common)
 
@@ -837,13 +851,13 @@ def run_simulation():
     sim_variable("height_ag", [2,5,8,10,20,50], keysize=10000, **common)
     sim_variable("receiver_radius", [0.025,0.05,0.075,0.10,0.15], keysize=10000, **common)
     sim_variable("filter_bandwidth", [0.1e-9,0.2e-9,0.5e-9,1e-9,2e-9,5e-9,10e-9], keysize=10000, **common)
-    sim_variable("fov_solid_angle", np.linspace(1e-9,1e-6,20), keysize=10000, **common)
+    sim_variable("fov_solid_angle", [1e-11,1e-10,1e-9,1e-8,1e-7], keysize=10000, **common)
     
     mmh = 2.7778e-7
 
     sim_variable("precipitation_rate", [0.1*mmh, 1*mmh, 5*mmh, 10*mmh, 20*mmh, 30*mmh], keysize=10000, **common)
-    sim_variable("interferometer_phase_error", np.linspace(0,1.1,20), keysize=10000, protocols=["COW","COW+Eve"], **common)
-    sim_variable("eve_position", np.linspace(0.1,0.9,9), keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
+    sim_variable("interferometer_phase_error", [0,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,10.0,100.0], keysize=10000, protocols=["COW","COW+Eve"], **common)
+    sim_variable("eve_position", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9], keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
 
     # -- Sweep #n: scenario by hour of day.
     # Bind site-specific parameters (sunrise/sunset/altitude) once via
@@ -870,9 +884,8 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
-    pd.DataFrame({"Total_execution_time_(seconds)":
-                  [time.time() - start]}
-                 ).to_csv("data/simulator_metrics.csv", index=False)
+    pd.DataFrame({"Total_execution_time_(seconds)": [time.time() - start]}).to_csv("data/simulator_metrics.csv", index=False)
+
 
 if __name__ == "__main__":
     run_simulation()
