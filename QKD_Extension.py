@@ -1160,6 +1160,10 @@ def run_simulation():
                   5000, 20000, 40000, 80000, 100000], protocols=ENTANGLEMENT_PROTOCOLS,
                  **common)
 
+    sim_variable("f_ec",
+                 [1.0,1.05,1.10,1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.20,1.22], protocols=ENTANGLEMENT_PROTOCOLS,
+                 **common)
+
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
                  
     sim_variable("efficiency", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0], keysize=10000, **common)
