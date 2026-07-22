@@ -1,9 +1,37 @@
 import os
+import gc
 
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
+# Force the non-interactive Agg backend BEFORE importing pyplot.  This script
+# only writes PNG files (no GUI), and Agg avoids the extra global state some
+# interactive backends retain between figures — one of the sources of the
+# steady memory growth that could get the process OOM-killed partway through a
+# long batch of figures.
+mpl.use("Agg")
 from matplotlib import pyplot as plt
+
+# Output resolution for every saved figure.  The peak memory of a savefig call
+# scales with dpi**2 (the figure is rasterised at that resolution, and
+# bbox_inches="tight" rasterises twice to measure the bounding box), so 300 dpi
+# on the larger multi-panel figures is the dominant contributor to peak RSS.
+# 200 dpi keeps these diagnostic plots sharp while cutting that peak by ~55%.
+# Override via the PLOT_DPI environment variable if you need print resolution.
+SAVE_DPI = int(os.environ.get("PLOT_DPI", "200"))
+
+
+def _save_and_close(fig, path):
+    """Save ``fig`` to ``path`` at SAVE_DPI, then release ALL of its memory.
+
+    Closing the explicit Figure object (not just the current pyplot figure) and
+    forcing a garbage collection after each save keeps the resident memory flat
+    across a long batch of figures, instead of letting it creep up until the OS
+    kills the process (the ``Killed`` symptom seen mid-run).
+    """
+    fig.savefig(path, dpi=SAVE_DPI, bbox_inches="tight")
+    plt.close(fig)
+    gc.collect()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Configuration
@@ -11,30 +39,52 @@ from matplotlib import pyplot as plt
 DATA_DIR = "data"
 
 # Canonical protocol order (used to keep legend/line order stable).
-PROTOCOLS = ["BB84", "B92", "COW"]
+# Prepare-and-measure protocols (BB84/B92/COW) and entanglement-based ones
+# (BBM92/E91) coexist in the same CSVs; ``PROTOCOLS`` is their union so every
+# figure iterates over whatever columns are present.  The two families are also
+# exposed separately so callers can, e.g., restrict a figure to one family.
+PM_PROTOCOLS  = ["BB84", "B92", "COW"]
+ENT_PROTOCOLS = ["BBM92", "E91"]
+PROTOCOLS = PM_PROTOCOLS + ENT_PROTOCOLS
 
 # Per-protocol styling for each of the three panels, mirroring the original
 # hand-picked colours/dashes.  Keyed by protocol so any subset renders
-# consistently.
+# consistently.  BBM92/E91 reuse the same dash vocabulary with distinct hues.
 SKR_STYLE = {
-    "BB84": dict(color="blue",  linestyle=(0, (1, 1)),  linewidth=2),
-    "B92":  dict(color="green", linestyle=(0, (1, 5)),  linewidth=3),
-    "COW":  dict(color="red",   linestyle=(0, (1, 10)), linewidth=4),
+    "BB84":  dict(color="blue",     linestyle=(0, (1, 1)),  linewidth=2),
+    "B92":   dict(color="green",    linestyle=(0, (1, 5)),  linewidth=3),
+    "COW":   dict(color="red",      linestyle=(0, (1, 10)), linewidth=4),
+    "BBM92": dict(color="darkcyan", linestyle=(0, (1, 3)),  linewidth=2),
+    "E91":   dict(color="purple",   linestyle=(0, (1, 7)),  linewidth=3),
 }
 QBER_STYLE = {
-    "BB84": dict(color="orange", linestyle=(0, (5, 1)),  linewidth=2),
-    "B92":  dict(color="maroon", linestyle=(0, (5, 5)),  linewidth=2),
-    "COW":  dict(color="violet", linestyle=(0, (5, 10)), linewidth=2),
+    "BB84":  dict(color="orange",  linestyle=(0, (5, 1)),  linewidth=2),
+    "B92":   dict(color="maroon",  linestyle=(0, (5, 5)),  linewidth=2),
+    "COW":   dict(color="violet",  linestyle=(0, (5, 10)), linewidth=2),
+    "BBM92": dict(color="teal",    linestyle=(0, (5, 3)),  linewidth=2),
+    "E91":   dict(color="indigo",  linestyle=(0, (5, 7)),  linewidth=2),
 }
 RS_STYLE = {
-    "BB84": dict(color="grey",  linestyle="solid",                linewidth=3),
-    "B92":  dict(color="cyan",  linestyle=(0, (3, 1, 1, 1)),       linewidth=2),
-    "COW":  dict(color="black", linestyle=(0, (3, 1, 1, 1, 1, 1)), linewidth=2),
+    "BB84":  dict(color="grey",        linestyle="solid",                linewidth=3),
+    "B92":   dict(color="cyan",        linestyle=(0, (3, 1, 1, 1)),       linewidth=2),
+    "COW":   dict(color="black",       linestyle=(0, (3, 1, 1, 1, 1, 1)), linewidth=2),
+    "BBM92": dict(color="darkgreen",   linestyle=(0, (3, 2, 1, 2)),       linewidth=2),
+    "E91":   dict(color="saddlebrown", linestyle=(0, (3, 3, 1, 3)),       linewidth=2),
 }
 VIS_STYLE = {
     "":     dict(color="blue",  linestyle=(0, (1, 1)),            linewidth=2),
     "+Eve": dict(color="green", linestyle=(0, (3, 1, 1, 1, 1, 1)), linewidth=2),
 }
+# CHSH is the E91 security witness (Bell parameter S); styled like VIS_STYLE so
+# the ideal/+Eve pair is visually consistent with the COW visibility plot.
+CHSH_STYLE = {
+    "":     dict(color="purple",  linestyle=(0, (1, 1)),             linewidth=2),
+    "+Eve": dict(color="crimson", linestyle=(0, (3, 1, 1, 1, 1, 1)), linewidth=2),
+}
+#: classical bound |S| = 2 of the CHSH inequality (violation => secure).
+CHSH_CLASSICAL_BOUND = 2.0
+#: Tsirelson bound |S| = 2*sqrt(2) (maximum for quantum correlations).
+CHSH_TSIRELSON = 2.0 * np.sqrt(2.0)
 
 # Human-readable X-axis labels (with units).  Any sweep not listed here falls
 # back to its raw column name, so unknown/new sweeps still plot correctly.
@@ -58,6 +108,11 @@ X_LABELS = {
     "eve_intercept_rate":         "Taxa de interceptação da Eve",
     "eve_position":               "Posição da Eve (fração da distância)",
     "hour":                       "Hora do dia [h]",
+    # entanglement-based sweeps (BBM92 / E91)
+    "f_ec":                       "Eficiência da correção de erros (f_EC)",
+    "num_rounds":                 "Número de rodadas da fonte de pares",
+    "mean_photon_num":            "Número médio de fótons por pulso (μ)",
+    "bell_state":                 "Estado de Bell da fonte",
 }
 
 # Force a specific X scale for particular sweeps.  Anything not listed uses the
@@ -94,6 +149,10 @@ BASE_PARAMS = {
     "receiver_radius":            "Raio receptor=0,103 m",
     "temperature":                "Temperatura=298,15 K",
     "wind_speed_perp":            "Vento perp.=4,34 m/s",
+    # entanglement-based operating point (BBM92 / E91), mirroring
+    # run_simulation()/run_entanglement_simulation() in QKD_Extension.py.
+    "f_ec":                       "f_EC=1,1",
+    "num_rounds":                 "Rodadas=10000",
 }
 
 # Short sweep names for the legend of the parallel-coordinates grid.
@@ -117,11 +176,16 @@ SWEEP_SHORT = {
     "receiver_radius":            "Raio receptor",
     "temperature":                "Temperatura",
     "wind_speed_perp":            "Vento perp.",
+    "f_ec":                       "f_EC",
+    "num_rounds":                 "Nº rodadas",
 }
 
 # Metrics shown (in this order) in the parallel-coordinates grid, with
-# (panel title, Y unit, scale factor applied to the raw value).
-METRIC_ORDER = ["R_sk", "QBER", "R_s", "Throughputs", "Latency", "Loss", "Visibility"]
+# (panel title, Y unit, scale factor applied to the raw value).  ``CHSH_S`` is
+# the E91 Bell parameter (kept unscaled); like ``Visibility`` it only exists for
+# some protocols, so panels/columns are created only when the data is present.
+METRIC_ORDER = ["R_sk", "QBER", "R_s", "Throughputs", "Latency", "Loss",
+                "Visibility", "CHSH_S"]
 METRIC_INFO = {
     "R_sk":        ("R_sk",            "bits por qubit", 1.0),
     "QBER":        ("QBER",            "%",              100.0),
@@ -130,6 +194,7 @@ METRIC_INFO = {
     "Latency":     ("Latência",        "s",              1.0),
     "Loss":        ("Perda do canal",  "fração",         1.0),
     "Visibility":  ("Visibilidade",    "",               1.0),
+    "CHSH_S":      ("CHSH |S|",         "",               1.0),
 }
 
 
@@ -188,9 +253,15 @@ def _x_scale(sweep_var: str, values) -> str:
     )
 
 
-def _present_protocols(df: pd.DataFrame, suffix: str) -> list:
-    """Protocols that have data for this scenario (``suffix`` = "" or "+Eve")."""
-    return [p for p in PROTOCOLS if f"R_sk-{p}{suffix}" in df.columns]
+def _present_protocols(df: pd.DataFrame, suffix: str, protocols=None) -> list:
+    """Protocols that have data for this scenario (``suffix`` = "" or "+Eve").
+
+    ``protocols`` restricts the search to a given family/subset (defaults to the
+    full ``PROTOCOLS`` union), so a figure can show only BB84/B92/COW or only
+    BBM92/E91 while still skipping any protocol absent from this CSV.
+    """
+    pool = PROTOCOLS if protocols is None else protocols
+    return [p for p in pool if f"R_sk-{p}{suffix}" in df.columns]
 
 
 def _legenda(metric: str, proto: str, suffix: str) -> str:
@@ -213,9 +284,14 @@ def _series(df: pd.DataFrame, metric: str, proto: str, suffix: str):
 # ═══════════════════════════════════════════════════════════════════════
 #  Single-scenario figure (R_sk + QBER on top, R_s on the bottom)
 # ═══════════════════════════════════════════════════════════════════════
-def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear"):
-    """Draw one scenario (ideal or +Eve) for whatever protocols are present."""
-    protocols = _present_protocols(df, suffix)
+def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear",
+                  protocols=None):
+    """Draw one scenario (ideal or +Eve) for whatever protocols are present.
+
+    ``protocols`` restricts the panel to a family (e.g. only BBM92/E91); when
+    None, every protocol present in the CSV is drawn.
+    """
+    protocols = _present_protocols(df, suffix, protocols)
     if not protocols:
         return  # nothing to draw for this scenario
 
@@ -261,8 +337,7 @@ def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear"):
     ax_bot.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.2),
                   fancybox=True, shadow=True, ncol=5)
 
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.close()
+    _save_and_close(fig, out_path)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -286,7 +361,7 @@ def plot_visibility(df, sweep_var, title, out_path, x_scale="linear"):
         (ln,) = ax.plot(x, y, label=_legenda("V", "COW", suffix), **VIS_STYLE[suffix])
         handles.append(ln)
     if not handles:
-        plt.close()
+        plt.close(fig)
         return
 
     ax.set_xlabel(_label(sweep_var))
@@ -297,35 +372,101 @@ def plot_visibility(df, sweep_var, title, out_path, x_scale="linear"):
     ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.2),
               fancybox=True, shadow=True, ncol=5)
 
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.close()
+    _save_and_close(fig, out_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CHSH figure (E91 only) — Bell parameter S vs. sweep
+# ═══════════════════════════════════════════════════════════════════════
+def plot_chsh(df, sweep_var, title, out_path, x_scale="linear"):
+    """Draw the E91 CHSH parameter |S| (ideal and/or +Eve) if present.
+
+    Two reference lines mark the classical bound |S| = 2 (violated => the
+    entanglement is intact and the key is secure) and the Tsirelson bound
+    |S| = 2*sqrt(2) (maximum quantum correlation).  |S| is plotted in absolute
+    value because the singlet source used here yields S ≈ -2*sqrt(2).
+    """
+    have = [s for s in ("", "+Eve") if f"CHSH_S-E91{s}" in df.columns]
+    if not have:
+        return
+
+    x = np.asarray(df[sweep_var], dtype=float)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.suptitle(title, fontsize=10)
+
+    handles = []
+    for suffix in have:
+        y = pd.to_numeric(df[f"CHSH_S-E91{suffix}"], errors="coerce").to_numpy(float)
+        if not np.any(np.isfinite(y)):
+            continue
+        (ln,) = ax.plot(x, np.abs(y), label=_legenda("|S|", "E91", suffix),
+                        **CHSH_STYLE[suffix])
+        handles.append(ln)
+    if not handles:
+        plt.close(fig)
+        return
+
+    (lc,) = ax.plot(x, np.full_like(x, CHSH_CLASSICAL_BOUND, dtype=float),
+                    color="black", linestyle="--", linewidth=1.2,
+                    label="Limite clássico |S|=2")
+    (lt,) = ax.plot(x, np.full_like(x, CHSH_TSIRELSON, dtype=float),
+                    color="grey", linestyle=":", linewidth=1.2,
+                    label="Limite de Tsirelson |S|=2√2")
+    handles += [lc, lt]
+
+    ax.set_xlabel(_label(sweep_var))
+    ax.set_ylabel("CHSH |S| (violação de Bell)")
+    ax.set_xscale(x_scale)
+    ax.grid(True)
+    labels = [h.get_label() for h in handles]
+    ax.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.2),
+              fancybox=True, shadow=True, ncol=4)
+
+    _save_and_close(fig, out_path)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 #  All figures for a single sweep file
 # ═══════════════════════════════════════════════════════════════════════
 def plot_sweep(df, filename, title=None):
-    """Generate every applicable figure for one sweep CSV."""
+    """Generate every applicable figure for one sweep CSV.
+
+    Prepare-and-measure (BB84/B92/COW) and entanglement-based (BBM92/E91)
+    protocols are drawn on SEPARATE R_sk/QBER/R_s figures: they use different
+    per-shot conventions (bits per qubit vs. per emitted pair) and different
+    QBER scales, so overlaying all five on one twin-axis panel is unreadable.
+    Each family is only emitted when it actually has columns in this CSV, so a
+    P&M-only sweep (e.g. interferometer_phase_error) or an entanglement-only
+    sweep (e.g. f_ec, num_rounds) still produces exactly the relevant figures.
+    """
     sweep_var = df.columns[0]
     x_scale = _x_scale(sweep_var, df[sweep_var])
-    
-    
+
     if title is None:
         title = ""
-    # Ideal scenario (columns with no +Eve suffix)
-    plot_scenario(df, sweep_var, suffix="", title=title,
-                  out_path=f"{DATA_DIR}/{filename}_graph-ideal_scenario.png",
-                  x_scale=x_scale)
 
-    # Eavesdropper scenario (+Eve columns)
-    plot_scenario(df, sweep_var, suffix="+Eve", title=title,
-                  out_path=f"{DATA_DIR}/{filename}_graph-Eve_scenario.png",
-                  x_scale=x_scale)
+    # (family, protocol subset, filename tag) — an empty tag keeps the original
+    # file names for the prepare-and-measure family (backward compatible).
+    families = [(PM_PROTOCOLS, ""), (ENT_PROTOCOLS, "_ent")]
+    for protos, tag in families:
+        # Ideal scenario (columns with no +Eve suffix)
+        plot_scenario(df, sweep_var, suffix="", title=title, protocols=protos,
+                      out_path=f"{DATA_DIR}/{filename}{tag}_graph-ideal_scenario.png",
+                      x_scale=x_scale)
+        # Eavesdropper scenario (+Eve columns)
+        plot_scenario(df, sweep_var, suffix="+Eve", title=title, protocols=protos,
+                      out_path=f"{DATA_DIR}/{filename}{tag}_graph-Eve_scenario.png",
+                      x_scale=x_scale)
 
-    # COW visibility
+    # COW visibility (prepare-and-measure security witness)
     plot_visibility(df, sweep_var, title=title,
                     out_path=f"{DATA_DIR}/{filename}_graph-visibility.png",
                     x_scale=x_scale)
+
+    # E91 CHSH (entanglement-based security witness)
+    plot_chsh(df, sweep_var, title=title,
+              out_path=f"{DATA_DIR}/{filename}_graph-chsh.png",
+              x_scale=x_scale)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -345,7 +486,10 @@ def plot_dual_graph(df_left, df_right, suffix, title, filename,
                      show_left_ylabel=True, show_right_ylabel=True):
         sweep_var = df.columns[0]
         x = np.asarray(df[sweep_var], dtype=float)
-        protocols = _present_protocols(df, suffix)
+        # This dual figure compares distance vs. key size; ``keysize`` is a
+        # prepare-and-measure concept (entanglement uses ``num_rounds``), so the
+        # comparison is restricted to BB84/B92/COW to stay meaningful.
+        protocols = _present_protocols(df, suffix, PM_PROTOCOLS)
         ax_top.set_title(subtitle, fontsize=fontsize)
 
         # Top: R_sk (left) + QBER (right twin)
@@ -388,8 +532,7 @@ def plot_dual_graph(df_left, df_right, suffix, title, filename,
                fancybox=True, shadow=True, ncol=5, fontsize=fontsize_legend, markerscale=3)
 
     plt.tight_layout(rect=[0, 0.08, 1, 0.96])
-    plt.savefig(f"{DATA_DIR}/{filename}_graph-dual.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    _save_and_close(fig, f"{DATA_DIR}/{filename}_graph-dual.png")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -519,8 +662,7 @@ def plot_parallel_grid(sweep_dfs, protocol, suffix, title, filename,
                fancybox=True, shadow=True, bbox_to_anchor=(0.5, -0.02))
 
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
-    plt.savefig(f"{DATA_DIR}/{filename}.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
     return True
 
 
@@ -575,8 +717,7 @@ def plot_tornado_grid(sweep_dfs, protocol, suffix, title, filename, ncols=3):
         axes[r][c].axis("off")
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.savefig(f"{DATA_DIR}/{filename}.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
     return True
 
 
@@ -626,8 +767,7 @@ def plot_sensitivity_heatmap(sweep_dfs, protocol, suffix, title, filename):
                         fontsize=6, color="white" if mat[i, j] < 0.6 else "black")
 
     plt.tight_layout()
-    plt.savefig(f"{DATA_DIR}/{filename}.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
     return True
 
 
@@ -667,6 +807,9 @@ SWEEPS = [
     "receiver_radius",
     "temperature",
     "wind_speed_perp",
+    # entanglement-only sweeps (BBM92 / E91); absent CSVs are skipped silently.
+    "f_ec",
+    "num_rounds",
 ]
 
 
