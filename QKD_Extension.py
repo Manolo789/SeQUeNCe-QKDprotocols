@@ -141,7 +141,7 @@ def _safe_mean(lst, default=np.nan):
     return result if not np.isnan(result) else default
 
 
-def _collect_metrics(protocol):
+def _collect_metrics(protocol, f_ec=1.0):
     """Generic metrics: QBER, throughput, latency, SKR, loss, R_s."""
     qber_list = protocol.error_rates
     throughputs = (np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0)
@@ -153,12 +153,12 @@ def _collect_metrics(protocol):
     rs_list, skr_sum = [], 0.0
     for i, e in enumerate(qber_list):
         rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        skr_sum += max(0.0, rs * (1 - 2 * binary_entropy(e)))
+        skr_sum += max(0.0, rs * (1 - f_ec * binary_entropy(e) - binary_entropy(e)))
         rs_list.append(rs)
     return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
 
-def _collect_cow_metrics(protocol, visibility, ls_params, loss):
+def _collect_cow_metrics(protocol, visibility, ls_params, loss, f_ec=1.0):
     """COW metrics with visibility-adjusted SKR (DOI 10.1063/1.2126792)."""
     qber_list = protocol.error_rates
     throughputs = (np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0)
@@ -175,7 +175,7 @@ def _collect_cow_metrics(protocol, visibility, ls_params, loss):
         rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
         v = visibility[i]
         eve_info = r + ((1 - v) * (1 + math.exp(-mu * t)) / (2 * math.exp(-mu * t)))
-        skr_sum += max(0.0, rs * (1 - binary_entropy(e) - eve_info))
+        skr_sum += max(0.0, rs * (1 - f_ec * binary_entropy(e) - eve_info))
         rs_list.append(rs)
     return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
@@ -283,7 +283,10 @@ def run_qkd_simulation(
             (efficiency, dark_count, time_resolution), loss/loss_parameters,
             thermal_params, eve_intercept_rate/eve_position — while
             runtime/keysize/key_num/phase-noise/interferometer kwargs are
-            ignored; num_rounds/f_ec/bell_state/seed apply ONLY to them.
+            ignored; num_rounds/bell_state/seed apply ONLY to them.
+            `f_ec` applies to EVERY protocol (same 1 - f_EC*H2(E) - H2(E)
+            key fraction), so the `f_ec` sweep is meaningful for the whole
+            registry and the families stay comparable.
             `distance` is then the length of EACH arm (Charlie->Alice and
             Charlie->Bob), i.e. Alice--Bob separation = 2*distance.
     """
@@ -401,9 +404,9 @@ def run_qkd_simulation(
     if cfg["needs_visibility"]:
         vis = proto_obj.visibility
         qber, th, lat, skr, rs = _collect_cow_metrics(
-            proto_obj, vis, ls_params, loss)
+            proto_obj, vis, ls_params, loss, f_ec)
         return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs, visibility=vis)
-    qber, th, lat, skr, rs = _collect_metrics(proto_obj)
+    qber, th, lat, skr, rs = _collect_metrics(proto_obj, f_ec)
     return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs)
 
 
@@ -443,8 +446,12 @@ def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", 
 #   * Eve via the fork's native EveQuantumChannel + generic EveNode on the
 #     Charlie -> Alice arm (the SAME photon object is forwarded, so the
 #     collapse propagates to Bob's partner photon);
-#   * asymptotic secure key rate via Kržič Eq. (2.11):
-#         R = C_sift * [1 - f_EC*H2(E) - H2(E)].
+#   * asymptotic secure key rate via Kržič Eq. (2.11), expressed PER
+#     EMITTED PAIR (i.e. per protocol round) so that it shares the unit
+#     of the prepare-and-measure `skr` (bits/qubit, dimensionless):
+#         r_sk = C_sift * [1 - f_EC*H2(E) - H2(E)],  C_sift = sift/round.
+#     Multiply by `frequency` to recover bits/s (exported separately as
+#     the `skr_bits_per_s` diagnostic).
 #
 # Topology: Charlie (EPS, untrusted) in the middle; `distance` is the length
 # of EACH arm, so the Alice--Bob separation is 2*distance — the configuration
@@ -555,7 +562,11 @@ def _run_entanglement_qkd(
     charlie.source.start(start_time=0)
 
     period = int(round(1e12 / frequency))
-    quantum_end = num_rounds * period + 5 * 10 ** 9   # slack for last photons
+    # Artificial padding so the last photons/messages are still in flight
+    # when the classical phase starts. It is NOT physical time: it is
+    # subtracted again before the latency is reported (see below).
+    slack_ps = 5 * 10 ** 9
+    quantum_end = num_rounds * period + slack_ps
     tl.schedule(Event(quantum_end - 2, Process(alice, "apply_noise_counts", [])))
     tl.schedule(Event(quantum_end - 1, Process(bob, "apply_noise_counts", [])))
     tl.schedule(Event(quantum_end, Process(alice.protocol_stack[0],
@@ -581,16 +592,49 @@ def _run_entanglement_qkd(
     secure_fraction = max(0.0, secure_fraction)
 
     sifted_len = metrics.get("sifted_len", metrics.get("key_rounds_len", 0))
-    quantum_time_s = num_rounds / frequency if frequency else 0.0
+    #quantum_time_s = num_rounds / frequency if frequency else 0.0
     # rs: sifted bits per emitted round; skr: asymptotic secure bits/s
+
+    # ── UNITS (must match the prepare-and-measure contract) ──
+    # rs  : sifted bits per emitted round      [bits/qubit]
+    # skr : secure bits per emitted round      [bits/qubit]  <- NOT bits/s
+    # The sifting factor is the SAME quantity in both (sifted_len), so
+    # skr/rs == secure_fraction exactly as in _collect_metrics. The bits
+    # publicly revealed for the QBER sample (BBM92, SAMPLE_DIVISOR) are a
+    # finite-size cost outside the asymptotic Eq. (2.11) and are excluded
+    # here, just as BB84/B92 pay no sample cost in _collect_metrics; the
+    # sample-discounted value is exported as `skr_key_basis`.
+
+
     rs = sifted_len / num_rounds if num_rounds else 0.0
-    skr = (n_compare / num_rounds) * secure_fraction * frequency
+    skr = rs * secure_fraction
+    skr_key_basis = (n_compare / num_rounds) * secure_fraction if num_rounds else 0.0
+    skr_bits_per_s = skr * frequency          # diagnostic only [bits/s]
+    
+    # Latency: physical time from the first emission to the established
+    # key (quantum phase + classical sifting round trip), with the
+    # artificial `slack_ps` padding removed. Same meaning as the
+    # prepare-and-measure `protocol.latency` (time to the first key).
+    latency = max(0.0, (tl.now() - slack_ps)) * 1e-12
+    # Throughput on the SAME time base as the P&M path (which divides by
+    # the full elapsed time of the key, classical exchange included),
+    # instead of the bare quantum-emission window.
+    quantum_time_s = num_rounds / frequency if frequency else 0.0
+    throughputs = (sifted_len / latency) if latency > 0 else 0.0
+
+    # Channel loss reported end to end (Alice--Bob = 2*distance), mirroring
+    # the composition already used on the Eve path of the P&M runner:
+    #     L_total = 1 - (1 - L_arm)^2
+    # `seg_loss` may legitimately return None (attenuation-formula fallback).
+    loss_arm = seg_loss(distance)
+    loss_total = (None if loss_arm is None
+                  else 1.0 - (1.0 - loss_arm) ** 2)
 
     result = dict(
         # ── shared metric contract (consumed by _worker/_unpack) ──
-        qber=e_est, skr=skr, rs=rs, loss=seg_loss(distance),
-        throughputs=(sifted_len / quantum_time_s) if quantum_time_s else 0.0,
-        latency=tl.now() * 1e-12,
+        qber=e_est, skr=skr, rs=rs, loss=loss_total,
+        throughputs=throughputs,
+        latency=latency,
         # ── entanglement diagnostics ──
         protocol=("BBM92" if cfg["qkdtype"] == 3 else "E91"),
         with_eve=with_eve, bell_state=bell_state, num_rounds=num_rounds,
@@ -600,6 +644,10 @@ def _run_entanglement_qkd(
         sifted_len=sifted_len, key_len=n_compare,
         key_error_rate=key_error_rate,
         secure_fraction=secure_fraction, f_ec=f_ec,
+        # unit-explicit extras (not part of the shared CSV contract)
+        skr_bits_per_s=skr_bits_per_s, skr_key_basis=skr_key_basis,
+        loss_per_arm=loss_arm, quantum_time_s=quantum_time_s,
+        raw_end_time_s=tl.now() * 1e-12,
     )
     if cfg.get("needs_chsh"):
         result["chsh_S"] = metrics.get("chsh_S", np.nan)
@@ -1141,7 +1189,7 @@ def run_simulation():
 
     env = default_environment()
     common = env["common"]
-    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "num_rounds": 10000, "f_ec": 1.1}
+    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "num_rounds": 10000, "f_ec": 1.0}
     site_altitude = env["site"]["site_altitude"]
 
     sim_variable("distance", range(100, 2001, 100),
@@ -1161,7 +1209,7 @@ def run_simulation():
                  **common)
 
     sim_variable("f_ec",
-                 [1.0,1.05,1.10,1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.20,1.22], protocols=ENTANGLEMENT_PROTOCOLS,
+                 [1.0,1.05,1.10,1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.20,1.22],
                  **common)
 
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve", "BBM92+Eve", "E91+Eve"], **common)

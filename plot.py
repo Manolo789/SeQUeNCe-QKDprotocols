@@ -190,7 +190,7 @@ METRIC_INFO = {
     "R_sk":        ("R_sk",            "bits por qubit", 1.0),
     "QBER":        ("QBER",            "%",              100.0),
     "R_s":         ("R_s",             "%",              100.0),
-    "Throughputs": ("Throughput",      "qubits/s",       1.0),
+    "Throughputs": ("Throughput",      "bits/s",         1.0),
     "Latency":     ("Latência",        "s",              1.0),
     "Loss":        ("Perda do canal",  "fração",         1.0),
     "Visibility":  ("Visibilidade",    "",               1.0),
@@ -270,6 +270,20 @@ def _legenda(metric: str, proto: str, suffix: str) -> str:
     return base + (" com Eve" if suffix else "")
 
 
+def _skr_ylabel(protocols) -> str:
+    """Eixo de R_sk com a normalizacao correta da familia desenhada.
+
+    R_sk e adimensional (bits por disparo) nas DUAS familias, mas o
+    "disparo" e um pulso enviado no prepara-e-mede e um PAR emitido pela
+    fonte nos protocolos de emaranhamento.
+    """
+    if protocols and all(p.split("+")[0] in ENT_PROTOCOLS for p in protocols):
+        return ("log₁₀ Taxa de chave secreta (R_sk)\n"
+                "[bits por par emitido]")
+    return ("log₁₀ Taxa de chave secreta (R_sk)\n"
+            "[bits por qubit enviado]")
+
+
 def _series(df: pd.DataFrame, metric: str, proto: str, suffix: str):
     """Return column values, or None if the column is absent/all-empty."""
     col = f"{metric}-{proto}{suffix}"
@@ -308,7 +322,7 @@ def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear",
             continue
         (ln,) = ax_top.plot(x, safe_log10(y), label=_legenda("R_sk", p, suffix), **SKR_STYLE[p])
         handles.append(ln)
-    ax_top.set_ylabel("log₁₀ Taxa de chave secreta (R_sk)\n[bits por qubit enviado]")
+    ax_top.set_ylabel(_skr_ylabel(protocols))
     ax_top.grid(True)
 
     # — Top-right (twin): QBER —
@@ -498,8 +512,9 @@ def plot_dual_graph(df_left, df_right, suffix, title, filename,
             if y is not None:
                 ax_top.plot(x, safe_log10(y), label=_legenda("R_sk", p, suffix), **SKR_STYLE[p])
         ax_top.set_ylabel(
-            "log₁₀ Taxa de chave secreta (R_sk)\n[bits por qubit enviado]"
-            if show_left_ylabel else "", fontsize=fontsize)
+            _skr_ylabel(protocols) if show_left_ylabel else "",
+            fontsize=fontsize)
+
         ax_top.grid(True)
 
         ax_q = ax_top.twinx()
