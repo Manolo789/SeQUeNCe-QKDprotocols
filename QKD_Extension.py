@@ -18,7 +18,10 @@ from sequence.kernel.timeline import Timeline
 from sequence.qkd.BB84 import pair_bb84_protocols
 from sequence.qkd.B92 import pair_b92_protocols
 from sequence.qkd.COW import pair_cow_protocols
-from sequence.topology.node import QKDNode, EveNode
+from sequence.qkd.BBM92 import pair_bbm92_protocols
+from sequence.qkd.E91 import pair_e91_protocols
+from sequence.topology.node import (QKDNode, EveNode,
+    EntanglementSourceNode, MeasuringNode)
 from sequence.utils.encoding_cow import time_bin_cow
 import sequence.utils.log as log
 
@@ -60,7 +63,42 @@ PROTOCOL_REGISTRY = {
         log_module="COW", has_eve=True, needs_visibility=True,
         ls_key="ls_params_cow", det_key="detector_params_cow", source_type="wcp",
     ),
+    # ── Entanglement-based protocols (BBM92 / E91) ─────────────────────────
+    # Different topology (untrusted EPS in the middle, TWO measuring nodes),
+    # but registered here so that the WHOLE existing pipeline — _worker,
+    # _build_tasks, _collect_results, _run_tasks, sim_variable, sim_scenario —
+    # is reused unchanged. run_qkd_simulation() dispatches on `entanglement`.
+    # qkdtype extends the QKDNode numbering: 3 = BBM92, 4 = E91.
+    # source_type: "eps" (1 pair/round) or "eps_poisson" (k~Poisson(mu) with
+    # mu = ls_params["mean_photon_num"], multi-pair accidentals, Kržič §2.1.4).
+    "BBM92": dict(qkdtype=3, pair_fn=pair_bbm92_protocols, encoding=None,
+        log_module="BBM92", has_eve=False, needs_visibility=False,
+        needs_chsh=False, entanglement=True,
+        ls_key="ls_params", det_key="detector_params", source_type="eps",
+    ),
+    "E91": dict(qkdtype=4, pair_fn=pair_e91_protocols, encoding=None,
+        log_module="E91", has_eve=False, needs_visibility=False,
+        needs_chsh=True, entanglement=True,
+        ls_key="ls_params", det_key="detector_params", source_type="eps",
+    ),
+    "BBM92+Eve": dict(qkdtype=3, pair_fn=pair_bbm92_protocols, encoding=None,
+        log_module="BBM92", has_eve=True, needs_visibility=False,
+        needs_chsh=False, entanglement=True,
+        ls_key="ls_params", det_key="detector_params", source_type="eps",
+    ),
+    "E91+Eve": dict(qkdtype=4, pair_fn=pair_e91_protocols, encoding=None,
+        log_module="E91", has_eve=True, needs_visibility=False,
+        needs_chsh=True, entanglement=True,
+        ls_key="ls_params", det_key="detector_params", source_type="eps",
+    ),
 }
+
+#: convenience protocol groups (sweep defaults use the prepare-and-measure
+#: group, preserving the historical behaviour of sim_variable/sim_scenario).
+PREPARE_MEASURE_PROTOCOLS = [p for p, c in PROTOCOL_REGISTRY.items()
+                             if not c.get("entanglement")]
+ENTANGLEMENT_PROTOCOLS = [p for p, c in PROTOCOL_REGISTRY.items()
+                          if c.get("entanglement")]
 
 # Metric column names used in the output CSVs (label, dict-key)
 _METRIC_COLS = [
@@ -68,12 +106,14 @@ _METRIC_COLS = [
     ("Latency", "latency"), ("Loss", "loss"), ("R_s", "rs"),
 ]
 _VIS_COL = ("Visibility", "visibility")
+_CHSH_COL = ("CHSH_S", "chsh_S")   # E91: same conditional-column pattern as _VIS_COL
 
 # Chaves reservadas do dicionário de resultado de _worker. Um sweep_var com
 # um destes nomes colidiria com uma métrica e apagaria (NaN) as colunas do
 # protocolo no CSV (caso histórico: sweep "visibility" [atmosférica] vs.
 # métrica "visibility" [interferômetro do COW]).
-_RESERVED_RESULT_KEYS = ({"protocol"} | {k for _, k in _METRIC_COLS} | {_VIS_COL[1]})
+_RESERVED_RESULT_KEYS = ({"protocol"} | {k for _, k in _METRIC_COLS}
+                         | {_VIS_COL[1], _CHSH_COL[1]})
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -101,7 +141,7 @@ def _safe_mean(lst, default=np.nan):
     return result if not np.isnan(result) else default
 
 
-def _collect_metrics(protocol):
+def _collect_metrics(protocol, f_ec=1.0):
     """Generic metrics: QBER, throughput, latency, SKR, loss, R_s."""
     qber_list = protocol.error_rates
     throughputs = (np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0)
@@ -113,12 +153,12 @@ def _collect_metrics(protocol):
     rs_list, skr_sum = [], 0.0
     for i, e in enumerate(qber_list):
         rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        skr_sum += max(0.0, rs * (1 - 2 * binary_entropy(e)))
+        skr_sum += max(0.0, rs * (1 - f_ec * binary_entropy(e) - binary_entropy(e)))
         rs_list.append(rs)
     return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
 
-def _collect_cow_metrics(protocol, visibility, ls_params, loss):
+def _collect_cow_metrics(protocol, visibility, ls_params, loss, f_ec=1.0):
     """COW metrics with visibility-adjusted SKR (DOI 10.1063/1.2126792)."""
     qber_list = protocol.error_rates
     throughputs = (np.mean(protocol.throughputs) if len(protocol.throughputs) > 0 else 0.0)
@@ -135,14 +175,19 @@ def _collect_cow_metrics(protocol, visibility, ls_params, loss):
         rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
         v = visibility[i]
         eve_info = r + ((1 - v) * (1 + math.exp(-mu * t)) / (2 * math.exp(-mu * t)))
-        skr_sum += max(0.0, rs * (1 - binary_entropy(e) - eve_info))
+        skr_sum += max(0.0, rs * (1 - f_ec * binary_entropy(e) - eve_info))
         rs_list.append(rs)
     return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
 
-def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
-    """Create and connect a ThermalNoiseSource to `detector`."""
-    n_B = n_background(
+def _n_background_photons(ls_params, thermal_params):
+    """Background photons per detection gate at one receiver.
+
+    Single source of truth for the ``n_background`` call, shared by
+    ``_attach_thermal_noise`` (prepare-and-measure detectors) and the
+    entanglement runner (per-round noise probability).
+    """
+    return n_background(
         wavelength=ls_params["wavelength"],
         filter_bandwidth=thermal_params["filter_bandwidth"],
         detection_gate=thermal_params["detection_gate"],
@@ -150,6 +195,11 @@ def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
         receiver_radius=thermal_params["receiver_radius"],
         B_sky_si=thermal_params["B_sky"]
     )
+
+
+def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
+    """Create and connect a ThermalNoiseSource to `detector`."""
+    n_B = _n_background_photons(ls_params, thermal_params)
     
     encoding = detector.owner.encoding if hasattr(detector.owner, "encoding") else None
     #src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
@@ -216,19 +266,46 @@ def run_qkd_simulation(
     source_type=None, loss=None, thermal_params=None,
     phase_noise_coefficient=0, interferometer_phase_error=0.20,
     eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None,
+    num_rounds=10000, f_ec=1.0, bell_state="psi_minus", seed=0,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
 
     Returns a dict with keys: qber, throughputs, latency, skr, loss, rs,
-    plus 'visibility' for COW protocols.
+    plus 'visibility' for COW protocols and 'chsh_S' for E91 protocols.
     
     Observation 1: phase_noise_coefficient: laser phase noise (Wiener, rad/√m). Atmospheric turbulence enters 
             exclusively via atmospheric_phase_process (constructed from loss_parameters). Never populate 
             this parameter with phase_noise() from QCLoss/loss.py when loss_parameters is present—doing so double-counts the turbulence.
     Observation 2: If loss != None, then the 'attenuation' quantity is not considered, as there is an attenuation model different from the one normally used.
-
+    Observation 3: For the entanglement-based protocols (BBM92/E91) the shared
+            contracts are reused — ls_params (frequency, wavelength,
+            mean_photon_num for "eps_poisson" sources), detector_params[0]
+            (efficiency, dark_count, time_resolution), loss/loss_parameters,
+            thermal_params, eve_intercept_rate/eve_position — while
+            runtime/keysize/key_num/phase-noise/interferometer kwargs are
+            ignored; num_rounds/bell_state/seed apply ONLY to them.
+            `f_ec` applies to EVERY protocol (same 1 - f_EC*H2(E) - H2(E)
+            key fraction), so the `f_ec` sweep is meaningful for the whole
+            registry and the families stay comparable.
+            `distance` is then the length of EACH arm (Charlie->Alice and
+            Charlie->Bob), i.e. Alice--Bob separation = 2*distance.
     """
     cfg = PROTOCOL_REGISTRY[protocol]
+
+    # Entanglement-based protocols: same registry, same sweep pipeline,
+    # dedicated topology (EPS in the middle + two measuring nodes).
+    if cfg.get("entanglement"):
+        return _run_entanglement_qkd(
+            cfg, ls_params, detector_params,
+            distance=distance, attenuation=attenuation, loss=loss,
+            loss_parameters=loss_parameters, thermal_params=thermal_params,
+            polarization_fidelity=polarization_fidelity,
+            source_type=source_type if source_type is not None else cfg["source_type"],
+            eve_intercept_rate=eve_intercept_rate, eve_position=eve_position,
+            num_rounds=num_rounds, f_ec=f_ec, bell_state=bell_state,
+            seed=seed,
+        )
+
     is_cow = cfg["qkdtype"] == 2
     src_type = source_type if source_type is not None else cfg["source_type"]
 
@@ -327,9 +404,9 @@ def run_qkd_simulation(
     if cfg["needs_visibility"]:
         vis = proto_obj.visibility
         qber, th, lat, skr, rs = _collect_cow_metrics(
-            proto_obj, vis, ls_params, loss)
+            proto_obj, vis, ls_params, loss, f_ec)
         return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs, visibility=vis)
-    qber, th, lat, skr, rs = _collect_metrics(proto_obj)
+    qber, th, lat, skr, rs = _collect_metrics(proto_obj, f_ec)
     return dict(qber=qber, throughputs=th, latency=lat, skr=skr, loss=loss, rs=rs)
 
 
@@ -338,7 +415,11 @@ def run_qkd_simulation(
 # ═══════════════════════════════════════════════════════════════════════
 def _unpack(res):
     base = (res["qber"], res["throughputs"], res["latency"], res["skr"], res["loss"], res["rs"])
-    return base + (res["visibility"],) if "visibility" in res else base
+    if "visibility" in res:
+        base += (res["visibility"],)
+    if "chsh_S" in res:
+        base += (res["chsh_S"],)
+    return base
 
 
 def simulation_BB84(*a, **kw):     return _unpack(run_qkd_simulation("BB84", *a, **kw))
@@ -347,6 +428,236 @@ def simulation_COW(*a, **kw):      return _unpack(run_qkd_simulation("COW", *a, 
 def simulation_BB84_Eve(*a, **kw): return _unpack(run_qkd_simulation("BB84+Eve", *a, **kw))
 def simulation_B92_Eve(*a, **kw):  return _unpack(run_qkd_simulation("B92+Eve", *a, **kw))
 def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", *a, **kw))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Entanglement-based QKD (BBM92 / E91): dedicated topology, shared pipeline
+# ═══════════════════════════════════════════════════════════════════════
+# Private implementation dispatched by run_qkd_simulation(). It REUSES the
+# fork's infrastructure instead of duplicating it:
+#   * per-arm FSO loss via the existing _compute_loss (channel_FSO_loss)
+#     injected through the fork's QuantumChannel(loss=...) override
+#     (attenuation formula is the fallback);
+#   * daylight background via the shared _n_background_photons helper
+#     (photons per detection gate) folded into a per-round noise probability
+#     at each MeasuringNode (accidental coincidences, Kržič Eq. 2.5); dark
+#     counts and the gate come from the SAME detector_params contract used
+#     by BB84/B92/COW (dark_count [Hz], detection_gate_from_detector);
+#   * Eve via the fork's native EveQuantumChannel + generic EveNode on the
+#     Charlie -> Alice arm (the SAME photon object is forwarded, so the
+#     collapse propagates to Bob's partner photon);
+#   * asymptotic secure key rate via Kržič Eq. (2.11), expressed PER
+#     EMITTED PAIR (i.e. per protocol round) so that it shares the unit
+#     of the prepare-and-measure `skr` (bits/qubit, dimensionless):
+#         r_sk = C_sift * [1 - f_EC*H2(E) - H2(E)],  C_sift = sift/round.
+#     Multiply by `frequency` to recover bits/s (exported separately as
+#     the `skr_bits_per_s` diagnostic).
+#
+# Topology: Charlie (EPS, untrusted) in the middle; `distance` is the length
+# of EACH arm, so the Alice--Bob separation is 2*distance — the configuration
+# that doubles the range w.r.t. BB84 (Kržič §2.1.2).
+
+def _run_entanglement_qkd(
+    cfg, ls_params, detector_params, *,
+    distance, attenuation, loss, loss_parameters, thermal_params,
+    polarization_fidelity, source_type,
+    eve_intercept_rate, eve_position,
+    num_rounds, f_ec, bell_state, seed,
+):
+    """Entanglement runner (see run_qkd_simulation Observation 3).
+
+    Returns the same result-dict shape as the prepare-and-measure path
+    (qber/throughputs/latency/skr/loss/rs [+ chsh_S for E91]) so that
+    _worker/_collect_results/_unpack work unchanged, plus the raw
+    entanglement diagnostics (sifted_len, key_len, key_error_rate, ...).
+    """
+    with_eve = cfg["has_eve"]
+    anti = (bell_state == "psi_minus")
+    frequency = ls_params["frequency"]
+    wavelength_nm = ls_params["wavelength"] * 1e9
+
+    tl = Timeline(stop_time=10 ** 14)
+    tl.show_progress = False
+
+    # --- per-receiver noise probability (shared detector/thermal contracts) --
+    det0 = detector_params[0]
+    gate = (thermal_params["detection_gate"] if thermal_params is not None
+            else detection_gate_from_detector(det0.get("time_resolution", 1000)))
+    n_B = (_n_background_photons(ls_params, thermal_params)
+           if thermal_params is not None else 0.0)
+    noise_prob = n_B + det0.get("dark_count", 0) * gate
+    pol_err = max(0.0, 1.0 - polarization_fidelity)
+
+    # --- measuring nodes (hardware + protocol at protocol_stack[0]) ----------
+    node_kwargs = dict(qkdtype=cfg["qkdtype"], stack_size=1,
+                       detector_efficiency=det0.get("efficiency", 1.0),
+                       polarization_error_prob=pol_err,
+                       noise_prob_per_round=noise_prob,
+                       anti_correlated=anti)
+    alice = MeasuringNode("Alice", tl, "alice", num_rounds,
+                          seed=seed + 1, **node_kwargs)
+    bob = MeasuringNode("Bob", tl, "bob", num_rounds,
+                        seed=seed + 2, **node_kwargs)
+
+    # --- source node (Charlie, untrusted relay) ------------------------------
+    mu = (ls_params.get("mean_photon_num")
+          if source_type == "eps_poisson" else None)
+    charlie = EntanglementSourceNode("Charlie", tl,
+                                     dst_alice="Alice", dst_bob="Bob",
+                                     num_rounds=num_rounds,
+                                     frequency=frequency, seed=seed + 3,
+                                     wavelength_nm=wavelength_nm,
+                                     bell_state=bell_state,
+                                     mean_photon_num=mu)
+
+    # --- quantum channels (fork API: loss override; pol. fidelity = 1.0) -----
+    def seg_loss(dist):
+        if loss_parameters is not None:
+            # existing single source of truth for the FSO loss recipe
+            return _compute_loss(dist, ls_params, loss_parameters)
+        if loss is not None:
+            # fixed per-arm loss; split multiplicatively for sub-segments
+            return 1.0 - (1.0 - loss) ** (dist / distance)
+        return None  # channel falls back to the attenuation formula
+
+    qc_common = dict(attenuation=attenuation, frequency=frequency,
+                     polarization_fidelity=1.0)
+
+    qc_bob = QuantumChannel("qc_charlie_bob", tl, distance=distance,
+                            loss=seg_loss(distance), **qc_common)
+    qc_bob.set_ends(charlie, "Bob")
+
+    eve = None
+    if with_eve:
+        # Fork-native mechanism (same as the prepare-and-measure Eve path):
+        # EveQuantumChannel inserts the generic EveNode transparently.
+        eve = EveNode("Eve", tl, intercept_rate=eve_intercept_rate,
+                      seed=seed + 9)
+        d1 = distance * eve_position
+        d2 = distance * (1.0 - eve_position)
+        qc_alice = EveQuantumChannel(
+            "qc_charlie_alice", tl, eve_node=eve,
+            attenuation=attenuation, distance=distance,
+            frequency=frequency, eve_position=eve_position,
+            loss_seg1=seg_loss(d1), loss_seg2=seg_loss(d2),
+            pf_seg1=1.0, pf_seg2=1.0,
+        )
+    else:
+        qc_alice = QuantumChannel("qc_charlie_alice", tl, distance=distance,
+                                  loss=seg_loss(distance), **qc_common)
+    qc_alice.set_ends(charlie, "Alice")
+
+    # --- classical channels (Alice <-> Bob, path through Charlie) ------------
+    cc_ab = ClassicalChannel("cc_alice_bob", tl, distance=2 * distance)
+    cc_ab.set_ends(alice, "Bob")
+    cc_ba = ClassicalChannel("cc_bob_alice", tl, distance=2 * distance)
+    cc_ba.set_ends(bob, "Alice")
+
+    # --- pair the protocols (BB84-style helper from the registry) ------------
+    cfg["pair_fn"](alice.protocol_stack[0], bob.protocol_stack[0],
+                   anti_correlated=anti)
+
+    # --- schedule -------------------------------------------------------------
+    tl.init()
+    charlie.source.start(start_time=0)
+
+    period = int(round(1e12 / frequency))
+    # Artificial padding so the last photons/messages are still in flight
+    # when the classical phase starts. It is NOT physical time: it is
+    # subtracted again before the latency is reported (see below).
+    slack_ps = 5 * 10 ** 9
+    quantum_end = num_rounds * period + slack_ps
+    tl.schedule(Event(quantum_end - 2, Process(alice, "apply_noise_counts", [])))
+    tl.schedule(Event(quantum_end - 1, Process(bob, "apply_noise_counts", [])))
+    tl.schedule(Event(quantum_end, Process(alice.protocol_stack[0],
+                                           "announce_bases", [])))
+    tl.run()
+
+    # --- metrics ---------------------------------------------------------------
+    alice_proto = alice.protocol_stack[0]
+    bob_proto = bob.protocol_stack[0]
+    key_a, key_b = alice_proto.key, bob_proto.key
+    n_compare = min(len(key_a), len(key_b))
+    mismatches = sum(1 for k in range(n_compare) if key_a[k] != key_b[k])
+    key_error_rate = mismatches / n_compare if n_compare else 0.0
+
+    metrics = alice_proto.metrics
+    if cfg["qkdtype"] == 3:                      # BBM92: sampled QBER
+        e_est = metrics.get("qber", 0.0)
+    else:                                        # E91: security from CHSH;
+        # the QBER estimate here is only indicative (a formal
+        # device-independent proof is out of scope).
+        e_est = key_error_rate
+    secure_fraction = 1.0 - f_ec * binary_entropy(e_est) - binary_entropy(e_est)
+    secure_fraction = max(0.0, secure_fraction)
+
+    sifted_len = metrics.get("sifted_len", metrics.get("key_rounds_len", 0))
+    #quantum_time_s = num_rounds / frequency if frequency else 0.0
+    # rs: sifted bits per emitted round; skr: asymptotic secure bits/s
+
+    # ── UNITS (must match the prepare-and-measure contract) ──
+    # rs  : sifted bits per emitted round      [bits/qubit]
+    # skr : secure bits per emitted round      [bits/qubit]  <- NOT bits/s
+    # The sifting factor is the SAME quantity in both (sifted_len), so
+    # skr/rs == secure_fraction exactly as in _collect_metrics. The bits
+    # publicly revealed for the QBER sample (BBM92, SAMPLE_DIVISOR) are a
+    # finite-size cost outside the asymptotic Eq. (2.11) and are excluded
+    # here, just as BB84/B92 pay no sample cost in _collect_metrics; the
+    # sample-discounted value is exported as `skr_key_basis`.
+
+
+    rs = sifted_len / num_rounds if num_rounds else 0.0
+    skr = rs * secure_fraction
+    skr_key_basis = (n_compare / num_rounds) * secure_fraction if num_rounds else 0.0
+    skr_bits_per_s = skr * frequency          # diagnostic only [bits/s]
+    
+    # Latency: physical time from the first emission to the established
+    # key (quantum phase + classical sifting round trip), with the
+    # artificial `slack_ps` padding removed. Same meaning as the
+    # prepare-and-measure `protocol.latency` (time to the first key).
+    latency = max(0.0, (tl.now() - slack_ps)) * 1e-12
+    # Throughput on the SAME time base as the P&M path (which divides by
+    # the full elapsed time of the key, classical exchange included),
+    # instead of the bare quantum-emission window.
+    quantum_time_s = num_rounds / frequency if frequency else 0.0
+    throughputs = (sifted_len / latency) if latency > 0 else 0.0
+
+    # Channel loss reported end to end (Alice--Bob = 2*distance), mirroring
+    # the composition already used on the Eve path of the P&M runner:
+    #     L_total = 1 - (1 - L_arm)^2
+    # `seg_loss` may legitimately return None (attenuation-formula fallback).
+    loss_arm = seg_loss(distance)
+    loss_total = (None if loss_arm is None
+                  else 1.0 - (1.0 - loss_arm) ** 2)
+
+    result = dict(
+        # ── shared metric contract (consumed by _worker/_unpack) ──
+        qber=e_est, skr=skr, rs=rs, loss=loss_total,
+        throughputs=throughputs,
+        latency=latency,
+        # ── entanglement diagnostics ──
+        protocol=("BBM92" if cfg["qkdtype"] == 3 else "E91"),
+        with_eve=with_eve, bell_state=bell_state, num_rounds=num_rounds,
+        detected_alice=len(alice.records), detected_bob=len(bob.records),
+        noise_counts=(alice.noise_counts, bob.noise_counts),
+        eve_intercepted=(eve.intercepted_count if eve else 0),
+        sifted_len=sifted_len, key_len=n_compare,
+        key_error_rate=key_error_rate,
+        secure_fraction=secure_fraction, f_ec=f_ec,
+        # unit-explicit extras (not part of the shared CSV contract)
+        skr_bits_per_s=skr_bits_per_s, skr_key_basis=skr_key_basis,
+        loss_per_arm=loss_arm, quantum_time_s=quantum_time_s,
+        raw_end_time_s=tl.now() * 1e-12,
+    )
+    if cfg.get("needs_chsh"):
+        result["chsh_S"] = metrics.get("chsh_S", np.nan)
+    return result
+
+# thin wrappers, symmetric with simulation_BB84 / simulation_B92 / ...
+def simulation_BBM92(*a, **kw):     return _unpack(run_qkd_simulation("BBM92", *a, **kw))
+def simulation_E91(*a, **kw):       return _unpack(run_qkd_simulation("E91", *a, **kw))
+def simulation_BBM92_Eve(*a, **kw): return _unpack(run_qkd_simulation("BBM92+Eve", *a, **kw))
+def simulation_E91_Eve(*a, **kw):   return _unpack(run_qkd_simulation("E91+Eve", *a, **kw))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -453,6 +764,8 @@ def _worker(task):
            "loss": res["loss"], "rs": res["rs"]}
     if "visibility" in res:
         out["visibility"] = _safe_mean(res["visibility"])
+    if "chsh_S" in res:
+        out["chsh_S"] = res["chsh_S"]
     return out
 
 
@@ -463,6 +776,8 @@ def _fallback_result(proto, sweep_var, sweep_val):
           "latency": np.nan, "loss": np.nan, "rs": np.nan}
     if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
         fb["visibility"] = np.nan
+    if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
+        fb["chsh_S"] = np.nan
     return fb
 
 
@@ -478,6 +793,8 @@ def _collect_results(sweep_var, sweep_values, results_list, protocols):
         cols = list(_METRIC_COLS)
         if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
             cols.append(_VIS_COL)
+        if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
+            cols.append(_CHSH_COL)
         for label, key in cols:
             metrics[f"{label}-{proto}"] = np.array(
                 [data[proto].get(v, {}).get(key, np.nan) for v in sweep_values])
@@ -608,11 +925,17 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
             "eve_position",
             "interferometer_phase_error",
             "phase_noise_coefficient",
+            # entanglement-only kwargs of run_qkd_simulation (BBM92/E91)
+            "num_rounds",
+            "f_ec",
+            "bell_state",
         ]:
             spec["kwarg_override"] = {sweep_var: val}
 
         elif sweep_var == "frequency":
             ls_overrides["frequency"] = val
+        elif sweep_var == "mean_photon_num":
+            ls_overrides["mean_photon_num"] = val
         elif sweep_var == "efficiency":
             det_override = []
             for d in detector_params:
@@ -731,9 +1054,20 @@ def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
 # ═══════════════════════════════════════════════════════════════════════
 #  Execution driver
 # ═══════════════════════════════════════════════════════════════════════
-def run_simulation():
-    start = time.time()
+def default_environment():
+    """Single source of truth for the simulation environment.
 
+    Builds the light-source, detector, atmospheric/site, FSO-loss and
+    thermal-noise parameter sets used by ALL drivers (run_simulation for
+    BB84/B92/COW and run_entanglement_simulation for BBM92/E91), so the
+    hardware/site configuration is defined exactly once.
+
+    Returns:
+        dict with keys: ls_params, ls_params_cow, detector_params,
+        detector_params_cow, channel_parameters, loss_parameters,
+        thermal_params, site (sunrise/sunset/latitude/longitude/altitude...),
+        extra_kwargs and common (ready-to-use kwargs for sim_variable).
+    """
     # -- Light-source parameters
     # Frequency and wavelength from
     # 'THORLABS. DBR78TK, DBR79TK Low-Noise Laser Systems: user guide.
@@ -809,7 +1143,7 @@ def run_simulation():
     #   communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021'
     #   A study of the natural source of brightness of the sky in ground-to-ground links is necessary.
 
-    extra_kwargs = None   # (antes: {'polarization': 'H'}; parâmetro removido)
+    extra_kwargs = None
 
     # -- Common kwargs reused by every variable-sweep
     common = dict(
@@ -824,6 +1158,40 @@ def run_simulation():
         extra_kwargs=extra_kwargs,
     )
 
+    site = dict(temperature=temperature, pressure=pressure,
+                wind_speed=wind_speed, height_link=height_link,
+                site_altitude=site_altitude, latitude=latitude,
+                longitude=longitude, sunrise=sunrise, sunset=sunset)
+
+    return dict(ls_params=ls_params, ls_params_cow=ls_params_cow,
+                detector_params=detector_params,
+                detector_params_cow=detector_params_cow,
+                channel_parameters=channel_parameters,
+                loss_parameters=loss_parameters,
+                thermal_params=thermal_params,
+                site=site, extra_kwargs=extra_kwargs, common=common)
+
+
+def build_diurnal_profile_fn(env):
+    """Diurnal profile bound to the site of `env` (used by both drivers)."""
+    site = env["site"]
+    df = pd.read_csv("sensores/estação-solar-usp_Tabela01.dat", sep=',', skiprows=4, header=None, decimal='.', low_memory=False)
+    df[0] = pd.to_datetime(df[0], format="%Y-%m-%d %H:%M:%S")
+    return partial(diurnal_profile, sunrise=site["sunrise"], sunset=site["sunset"],
+                   site_altitude=site["site_altitude"], latitude=site["latitude"],
+                   longitude=site["longitude"],
+                   local_tz=timezone(timedelta(hours=-2)), date="2015-02-04",
+                   dataframe=df)
+
+
+def run_simulation():
+    start = time.time()
+
+    env = default_environment()
+    common = env["common"]
+    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "num_rounds": 10000, "f_ec": 1.0}
+    site_altitude = env["site"]["site_altitude"]
+
     sim_variable("distance", range(100, 2001, 100),
                  keysize=10000, **common)
 
@@ -832,10 +1200,19 @@ def run_simulation():
 
     sim_variable("keysize",
                  [20, 45, 50, 100, 200, 400, 800, 1600,
-                  5000, 20000, 40000, 80000, 100000],
+                  5000, 20000, 40000, 80000, 100000], protocols=PREPARE_MEASURE_PROTOCOLS,
+                 **common)
+                 
+    sim_variable("num_rounds",
+                 [20, 45, 50, 100, 200, 400, 800, 1600,
+                  5000, 20000, 40000, 80000, 100000], protocols=ENTANGLEMENT_PROTOCOLS,
                  **common)
 
-    sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve"], **common)
+    sim_variable("f_ec",
+                 [1.0,1.05,1.10,1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.20,1.22],
+                 **common)
+
+    sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
                  
     sim_variable("efficiency", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0], keysize=10000, **common)
     sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
@@ -857,35 +1234,27 @@ def run_simulation():
 
     sim_variable("precipitation_rate", [0.1*mmh, 1*mmh, 5*mmh, 10*mmh, 20*mmh, 30*mmh], keysize=10000, **common)
     sim_variable("interferometer_phase_error", [0,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,10.0,100.0], keysize=10000, protocols=["COW","COW+Eve"], **common)
-    sim_variable("eve_position", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9], keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve"], **common)
+    sim_variable("eve_position", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9], keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
 
-    # -- Sweep #n: scenario by hour of day.
-    # Bind site-specific parameters (sunrise/sunset/altitude) once via
-    # functools.partial, leaving only the (token, base_loss_parameters,
-    # base_thermal_params, ls_params) signature that sim_scenario expects.
-    df = pd.read_csv("sensores/estação-solar-usp_Tabela01.dat", sep=',', skiprows=4, header=None, decimal='.', low_memory=False)
-    df[0] = pd.to_datetime(df[0], format="%Y-%m-%d %H:%M:%S")
-    diurnp_fn = partial(diurnal_profile, sunrise=sunrise, sunset=sunset,
-                     site_altitude=site_altitude, latitude=latitude, longitude=longitude,
-                     local_tz=timezone(timedelta(hours=-2)), date="2015-02-04", dataframe=df)
-    
+    # -- Sweep #n: scenario by hour of day (site bound by the shared builder).
+    diurnp_fn = build_diurnal_profile_fn(env)
+
     sim_scenario(
         label="hour",
         scenario_points=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
         runtime=1000,
-        channel_parameters=channel_parameters,
-        ls_params=ls_params, ls_params_cow=ls_params_cow,
-        detector_params=detector_params,
-        detector_params_cow=detector_params_cow,
+        channel_parameters=env["channel_parameters"],
+        ls_params=env["ls_params"], ls_params_cow=env["ls_params_cow"],
+        detector_params=env["detector_params"],
+        detector_params_cow=env["detector_params_cow"],
         keysize=10_000, key_num=1,
-        base_loss_parameters=loss_parameters,
-        base_thermal_params=thermal_params,
+        base_loss_parameters=env["loss_parameters"],
+        base_thermal_params=env["thermal_params"],
         diurnal_profile_fn=diurnp_fn,
-        extra_kwargs=extra_kwargs,
+        extra_kwargs=common["extra_kwargs"],
     )
 
     pd.DataFrame({"Total_execution_time_(seconds)": [time.time() - start]}).to_csv("data/simulator_metrics.csv", index=False)
-
 
 if __name__ == "__main__":
     run_simulation()

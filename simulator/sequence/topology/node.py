@@ -5,7 +5,7 @@ All node types inherit from the base Node type, which inherits from Entity.
 Node types can be used to collect all the necessary hardware and software for a network usage scenario.
 """
 
-from math import inf
+from math import inf, pi
 from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
@@ -35,6 +35,9 @@ from ..components.photon import Photon
 from ..qkd.BB84 import BB84
 from ..qkd.B92 import B92
 from ..qkd.COW import COW
+from ..qkd.BBM92 import BBM92
+from ..qkd.E91 import E91
+from ..qkd.entanglement import BellPairSource, basis_from_angle
 from ..qkd.cascade import Cascade
 from ..entanglement_management.generation import EntanglementGenerationB
 from ..resource_management.resource_manager import ResourceManager
@@ -767,6 +770,207 @@ class QKDNode(Node):
 
     def get(self, photon: "Photon", **kwargs):
         self.send_qubit(self.destination, photon)
+
+
+class EntanglementSourceNode(Node):
+    """Central node (Charlie) hosting the entangled pair source.
+
+    Untrusted relay for the entanglement-based QKD protocols (BBM92 and
+    E91, qkdtypes 3 and 4): it only distributes Bell pairs, one photon to
+    each measuring node (see Kržič dissertation §2.1.2 -- this doubles the
+    range w.r.t. BB84 because ``distance`` is the length of EACH arm).
+
+    The hardware (a :class:`~sequence.qkd.entanglement.BellPairSource`) is
+    registered in ``components`` and exposed as ``self.source``, in the same
+    way ``QKDNode`` hosts its light source for BB84/B92/COW.
+
+    Attributes:
+        name (str): label for node instance.
+        timeline (Timeline): timeline for simulation.
+        source (BellPairSource): entangled pair source component.
+    """
+
+    def __init__(self, name: str, timeline: "Timeline", dst_alice: str,
+                 dst_bob: str, num_rounds: int, frequency: float = 1e6,
+                 seed=None, wavelength_nm: float = 810,
+                 bell_state: str = "psi_minus", mean_photon_num=None,
+                 component_templates=None):
+        """Constructor for the entanglement source node.
+
+        Args:
+            name (str): label for the node instance.
+            timeline (Timeline): simulation timeline.
+            dst_alice (str): name of the next node on Alice's arm.
+            dst_bob (str): name of the next node on Bob's arm.
+            num_rounds (int): number of emission rounds.
+            frequency (float): pair generation rate [Hz].
+            seed (int): seed for the random number generator.
+            wavelength_nm (float): photon wavelength [nm].
+            bell_state (str): "psi_minus" (dissertation source, Eq. 3.1;
+                default) or "phi_plus".
+            mean_photon_num (float): if set, Poissonian emission
+                k ~ Poisson(mu) per round (multi-pair accidentals).
+        """
+        super().__init__(name, timeline, seed)
+        if not component_templates:
+            component_templates = {}
+        src_args = component_templates.get("BellPairSource", {})
+        self.source = BellPairSource(name + ".bellpairsource", timeline, self,
+                                     dst_alice, dst_bob, num_rounds,
+                                     frequency, wavelength_nm,
+                                     bell_state=bell_state,
+                                     mean_photon_num=mean_photon_num,
+                                     **src_args)
+        self.add_component(self.source)
+
+    def receive_qubit(self, src: str, qubit) -> None:
+        # the source node does not receive photons
+        pass
+
+
+class MeasuringNode(Node):
+    """Measuring node (Alice or Bob) for entanglement-based QKD.
+
+    Counterpart of ``QKDNode`` for the entanglement-based protocols: it
+    hosts the measurement "hardware" (analyser settings + detector model)
+    and instantiates the sifting protocol in ``protocol_stack[0]``,
+    extending the ``qkdtype`` numbering used by ``QKDNode``:
+
+        3 (BBM92 QKD protocol), 4 (E91 QKD protocol)
+
+    On photon arrival: (1) detector efficiency (Bernoulli); (2) measurement
+    in the pre-drawn analyser setting for that round (``Photon.measure``
+    handles the entangled joint state correctly); (3) optional
+    phenomenological depolarization with probability
+    ``polarization_error_prob`` -- the channel-level
+    ``polarization_fidelity`` must stay at 1.0 because the upstream
+    ``FreeQuantumState.random_noise`` corrupts entangled states (open TODO
+    in the library); (4) record ``(setting, outcome)`` under the photon's
+    ``round_index`` coincidence tag.
+
+    ``apply_noise_counts()`` must be called after the quantum window: every
+    round WITHOUT a true detection gets a noise count (random outcome) with
+    probability ``noise_prob_per_round`` = (S_dark + S_back) * gate. This is
+    how accidental coincidences (Kržič Eq. 2.5) arise in the round-tag
+    approximation, so daylight background produces QBER > 0 without any Eve.
+
+    Attributes:
+        name (str): label for node instance.
+        timeline (Timeline): timeline for simulation.
+        role (str): "alice" or "bob" (selects the analyser angle set).
+        angles (list[float]): analyser angles [rad] for this node.
+        settings (np.ndarray): pre-drawn analyser setting per round.
+        records (dict[int, tuple[int, int]]): round -> (setting, outcome).
+        noise_counts (int): number of rounds filled by noise counts.
+        protocol_stack (list): sifting protocol at layer 0 (BBM92 or E91).
+    """
+
+    def __init__(self, name: str, timeline: "Timeline", role: str,
+                 num_rounds: int, qkdtype: int = 3, stack_size: int = 1,
+                 detector_efficiency: float = 0.9, seed=None,
+                 polarization_error_prob: float = 0.0,
+                 noise_prob_per_round: float = 0.0,
+                 anti_correlated: bool = True):
+        """Constructor for the measuring node class.
+
+        Args:
+            name (str): label for the node instance.
+            timeline (Timeline): simulation timeline.
+            role (str): "alice" or "bob".
+            num_rounds (int): number of source emission rounds.
+            qkdtype (int): 3 (BBM92 QKD protocol), 4 (E91 QKD protocol).
+            stack_size (int): 0 = no protocol, >=1 = sifting protocol at
+                layer 0 (cascade/error-correction not yet supported for
+                the entanglement-based stack).
+            detector_efficiency (float): single-photon detector efficiency.
+            seed (int): seed for the random number generator.
+            polarization_error_prob (float): per-photon depolarization
+                probability (phenomenological channel error, contributes
+                (1-f)/2 to the QBER).
+            noise_prob_per_round (float): probability that an undetected
+                round is filled by a dark/background count.
+            anti_correlated (bool): True for the |Psi-> source (default).
+        """
+        super().__init__(name, timeline, seed)
+        assert role in ("alice", "bob"), \
+            f"MeasuringNode role must be 'alice' or 'bob'; given {role}"
+        self.role = role
+        self.num_rounds = num_rounds
+        self.detector_efficiency = detector_efficiency
+        self.polarization_error_prob = polarization_error_prob
+        self.noise_prob_per_round = noise_prob_per_round
+        self.noise_counts = 0
+
+        # protocol selection (extends the QKDNode qkdtype numbering)
+        if qkdtype == 3:
+            proto_cls, label = BBM92, "BBM92"
+        elif qkdtype == 4:
+            proto_cls, label = E91, "E91"
+        else:
+            raise ValueError(
+                f"invalid qkdtype {qkdtype} for MeasuringNode {name} "
+                "(3 = BBM92, 4 = E91)")
+
+        # measurement "hardware": analyser angles + pre-drawn settings
+        angles_deg = proto_cls.angles_for_role(role)
+        self.angles = [a * pi / 180.0 for a in angles_deg]
+        self.settings = self.generator.integers(0, len(self.angles),
+                                                num_rounds)
+        self.records: dict = {}
+
+        # add protocols (layer 0 = sifting, as in QKDNode)
+        self.protocol_stack = [None] * 5
+        if stack_size > 0:
+            self.protocol_stack[0] = proto_cls(
+                self, name + "." + label, anti_correlated=anti_correlated)
+            self.protocols.append(self.protocol_stack[0])
+
+    def init(self) -> None:
+        super().init()
+        if self.protocol_stack[0] is not None:
+            assert self.protocol_stack[0].role != -1, \
+                f"protocol of MeasuringNode {self.name} was not paired " \
+                "(call pair_bbm92_protocols / pair_e91_protocols)"
+
+    def receive_qubit(self, src: str, photon) -> None:
+        """Measure an arriving photon in the pre-drawn analyser setting."""
+        if getattr(photon, "is_null", False):
+            # photon lost upstream (e.g. forwarded by EveNode as null)
+            return
+        i = getattr(photon, "round_index", None)
+        if i is None or i in self.records:
+            return
+        # detector efficiency: sometimes the photon is not detected (loss)
+        if self.generator.random() > self.detector_efficiency:
+            return
+        setting = int(self.settings[i])
+        basis = basis_from_angle(self.angles[setting])
+        outcome = Photon.measure(basis, photon, self.generator)
+        # phenomenological per-photon depolarization (see class docstring)
+        if (self.polarization_error_prob > 0.0
+                and self.generator.random() < self.polarization_error_prob):
+            outcome = int(self.generator.integers(0, 2))
+        self.records[i] = (setting, int(outcome))
+
+    def apply_noise_counts(self) -> None:
+        """Fill undetected rounds with dark/background noise counts.
+
+        Approximation: noise only occupies rounds without a true detection
+        (the second-order effect of a noise count "stealing" the window of
+        a real photon is neglected). The outcome is uniform because thermal
+        background light is unpolarized and dark counts fall on either
+        detector.
+        """
+        if self.noise_prob_per_round <= 0.0:
+            return
+        for i in range(self.num_rounds):
+            if i in self.records:
+                continue
+            if self.generator.random() < self.noise_prob_per_round:
+                self.records[i] = (int(self.settings[i]),
+                                   int(self.generator.integers(0, 2)))
+                self.noise_counts += 1
+
 
 class EveNode(Node):
     """Eavesdropping node that implements interception and retransmission attacks on the quantum channel.
