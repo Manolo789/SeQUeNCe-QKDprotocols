@@ -180,6 +180,63 @@ def _collect_cow_metrics(protocol, visibility, ls_params, loss, f_ec=1.0):
     return qber_list, throughputs, latency, skr_sum / len(qber_list), float(np.mean(rs_list))
 
 
+def resolve_entanglement_arms(distance, charlie_position=0.5,
+                              distance_ac=None, distance_cb=None):
+    """Split the Alice--Bob separation into the two source arms.
+
+    ``distance`` has the SAME meaning for every protocol in the registry:
+    the total Alice--Bob separation. For the entanglement-based family the
+    untrusted source (Charlie) sits somewhere between them, and
+
+        distance = distance_ac + distance_cb
+
+    with ``charlie_position`` in (0, 1) fixing where along the link he is:
+
+        distance_ac = charlie_position * distance
+        distance_cb = (1 - charlie_position) * distance
+
+    so ``charlie_position = 0.5`` is the symmetric configuration (each arm
+    carries half of the link, the case that extends the reachable range
+    w.r.t. a prepare-and-measure link of the same total length) while
+    ``charlie_position -> 0`` puts the source at Alice's site.
+
+    When ``charlie_position`` is None the two arms are taken from the
+    optional ``distance_ac`` / ``distance_cb`` parameters instead, and the
+    total separation is their sum (asymmetric links whose split is given
+    directly rather than as a fraction).
+
+    Args:
+        distance (float): total Alice--Bob separation [m]; may be None if
+            both arms are given explicitly.
+        charlie_position (float): fraction of ``distance`` on Alice's arm,
+            or None to use the explicit arms.
+        distance_ac (float): Alice--Charlie arm [m] (used when
+            ``charlie_position`` is None).
+        distance_cb (float): Charlie--Bob arm [m] (idem).
+
+    Returns:
+        tuple: (distance_ac, distance_cb, distance_total) in metres.
+    """
+    if distance is not None and charlie_position is not None:
+        position = float(charlie_position)
+        if not 0.0 < position < 1.0:
+            raise ValueError(
+                f"charlie_position deve estar em (0, 1); recebido {position!r} "
+                "(0 = fonte junto de Alice, 1 = fonte junto de Bob).")
+        total = float(distance)
+        return position * total, (1.0 - position) * total, total
+
+    if distance_ac is None or distance_cb is None:
+        raise ValueError(
+            "com charlie_position=None (ou distance=None) é preciso informar "
+            "explicitamente distance_ac e distance_cb; "
+            f"recebido distance_ac={distance_ac!r}, distance_cb={distance_cb!r}.")
+    arm_ac, arm_cb = float(distance_ac), float(distance_cb)
+    if arm_ac < 0 or arm_cb < 0:
+        raise ValueError("distance_ac e distance_cb devem ser não-negativos.")
+    return arm_ac, arm_cb, arm_ac + arm_cb
+
+
 def _n_background_photons(ls_params, thermal_params):
     """Background photons per detection gate at one receiver.
 
@@ -266,7 +323,8 @@ def run_qkd_simulation(
     source_type=None, loss=None, thermal_params=None,
     phase_noise_coefficient=0, interferometer_phase_error=0.20,
     eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None,
-    num_rounds=10000, f_ec=1.0, bell_state="psi_minus", seed=0,
+    charlie_position=0.1, distance_ac=None, distance_cb=None,
+    f_ec=1.0, bell_state="psi_minus", seed=0,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
 
@@ -281,14 +339,24 @@ def run_qkd_simulation(
             contracts are reused — ls_params (frequency, wavelength,
             mean_photon_num for "eps_poisson" sources), detector_params[0]
             (efficiency, dark_count, time_resolution), loss/loss_parameters,
-            thermal_params, eve_intercept_rate/eve_position — while
-            runtime/keysize/key_num/phase-noise/interferometer kwargs are
-            ignored; num_rounds/bell_state/seed apply ONLY to them.
+            thermal_params, eve_intercept_rate/eve_position — AND, since the
+            entanglement family is keysize-oriented too, runtime/keysize/
+            key_num as well: `push(keysize, key_num, run_time)` drives both
+            families, the sifted bits accumulate over successive trains and
+            a key is emitted whenever `len(key_bits) >= keysize`. Only the
+            phase-noise/interferometer kwargs remain prepare-and-measure
+            specific; charlie_position/distance_ac/distance_cb/bell_state/
+            seed apply ONLY to the entanglement family.
             `f_ec` applies to EVERY protocol (same 1 - f_EC*H2(E) - H2(E)
             key fraction), so the `f_ec` sweep is meaningful for the whole
             registry and the families stay comparable.
-            `distance` is then the length of EACH arm (Charlie->Alice and
-            Charlie->Bob), i.e. Alice--Bob separation = 2*distance.
+    Observation 4: `distance` is ALWAYS the total Alice--Bob separation. For the
+            entanglement family the untrusted source sits between them and
+            the arms follow from `charlie_position`
+            (distance = distance_ac + distance_cb, see
+            :func:`resolve_entanglement_arms`); with charlie_position=None
+            the arms are read from `distance_ac`/`distance_cb` instead. This
+            makes a `distance` sweep mean the same thing for every protocol.
     """
     cfg = PROTOCOL_REGISTRY[protocol]
 
@@ -297,13 +365,15 @@ def run_qkd_simulation(
     if cfg.get("entanglement"):
         return _run_entanglement_qkd(
             cfg, ls_params, detector_params,
-            distance=distance, attenuation=attenuation, loss=loss,
+            distance=distance, charlie_position=charlie_position,
+            distance_ac=distance_ac, distance_cb=distance_cb,
+            attenuation=attenuation, loss=loss,
             loss_parameters=loss_parameters, thermal_params=thermal_params,
             polarization_fidelity=polarization_fidelity,
             source_type=source_type if source_type is not None else cfg["source_type"],
             eve_intercept_rate=eve_intercept_rate, eve_position=eve_position,
-            num_rounds=num_rounds, f_ec=f_ec, bell_state=bell_state,
-            seed=seed,
+            runtime=runtime, keysize=keysize, key_num=key_num,
+            f_ec=f_ec, bell_state=bell_state, seed=seed,
         )
 
     is_cow = cfg["qkdtype"] == 2
@@ -446,37 +516,52 @@ def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", 
 #   * Eve via the fork's native EveQuantumChannel + generic EveNode on the
 #     Charlie -> Alice arm (the SAME photon object is forwarded, so the
 #     collapse propagates to Bob's partner photon);
-#   * asymptotic secure key rate via Kržič Eq. (2.11), expressed PER
-#     EMITTED PAIR (i.e. per protocol round) so that it shares the unit
-#     of the prepare-and-measure `skr` (bits/qubit, dimensionless):
-#         r_sk = C_sift * [1 - f_EC*H2(E) - H2(E)],  C_sift = sift/round.
-#     Multiply by `frequency` to recover bits/s (exported separately as
-#     the `skr_bits_per_s` diagnostic).
+#   * key generation driven by `push(keysize, key_num, run_time)` — the SAME
+#     entry point as BB84/B92/COW — so there is NO "number of rounds" knob:
+#     the sifted bits of successive emission trains accumulate in `key_bits`
+#     and a key is extracted whenever len(key_bits) >= keysize, until the
+#     runtime or key_num is exhausted. The total number of emission rounds
+#     is a DERIVED quantity, reported as `num_rounds` for diagnostics only;
+#   * consequently the secure key rate is estimated by the SHARED
+#     `_collect_metrics` (no dedicated metrics block any more): both
+#     families run the same code with the same denominator, so R_sk and R_s
+#     carry the same unit for all five protocols —
+#         R_s  = sifted bits / qubit sent   (send_bits_length per train),
+#         R_sk = R_s * [1 - f_EC*H2(E) - H2(E)]   (Kržič Eq. 2.11),
+#     i.e. bits per qubit sent. Multiply by `frequency` to recover bits/s
+#     (exported separately as the `skr_bits_per_s` diagnostic).
 #
-# Topology: Charlie (EPS, untrusted) in the middle; `distance` is the length
-# of EACH arm, so the Alice--Bob separation is 2*distance — the configuration
-# that doubles the range w.r.t. BB84 (Kržič §2.1.2).
+# Topology: Charlie (EPS, untrusted) between Alice and Bob; `distance` is the
+# TOTAL Alice--Bob separation and `charlie_position` splits it into the two
+# arms (see resolve_entanglement_arms), exactly the quantity swept for the
+# prepare-and-measure protocols — so the two families are directly
+# comparable on every axis.
 
 def _run_entanglement_qkd(
     cfg, ls_params, detector_params, *,
-    distance, attenuation, loss, loss_parameters, thermal_params,
+    distance, charlie_position, distance_ac, distance_cb,
+    attenuation, loss, loss_parameters, thermal_params,
     polarization_fidelity, source_type,
     eve_intercept_rate, eve_position,
-    num_rounds, f_ec, bell_state, seed,
+    runtime, keysize, key_num, f_ec, bell_state, seed,
 ):
-    """Entanglement runner (see run_qkd_simulation Observation 3).
+    """Entanglement runner (see run_qkd_simulation Observations 3 and 4).
 
     Returns the same result-dict shape as the prepare-and-measure path
     (qber/throughputs/latency/skr/loss/rs [+ chsh_S for E91]) so that
     _worker/_collect_results/_unpack work unchanged, plus the raw
-    entanglement diagnostics (sifted_len, key_len, key_error_rate, ...).
+    entanglement diagnostics (num_rounds, num_trains, sampled_qber, ...).
     """
+    arm_ac, arm_cb, total_distance = resolve_entanglement_arms(
+        distance, charlie_position, distance_ac, distance_cb)
+
     with_eve = cfg["has_eve"]
     anti = (bell_state == "psi_minus")
     frequency = ls_params["frequency"]
     wavelength_nm = ls_params["wavelength"] * 1e9
 
-    tl = Timeline(stop_time=10 ** 14)
+    # Same time budget contract as the prepare-and-measure runner.
+    tl = Timeline(runtime * 1e9)
     tl.show_progress = False
 
     # --- per-receiver noise probability (shared detector/thermal contracts) --
@@ -488,23 +573,30 @@ def _run_entanglement_qkd(
     noise_prob = n_B + det0.get("dark_count", 0) * gate
     pol_err = max(0.0, 1.0 - polarization_fidelity)
 
+    # --- train length: the entanglement analog of the BB84 pulse train ------
+    # BB84: light_time = keysize / (frequency * mean_photon_num) and
+    #       num_pulses = light_time * frequency = keysize / mean_photon_num.
+    # Here one round emits one pulse of the pair source, so the train has
+    # exactly the same number of emission attempts for the same keysize.
+    mu = (ls_params.get("mean_photon_num")
+          if source_type == "eps_poisson" else None)
+    rounds_per_train = max(1, int(round(keysize / (mu or 1.0))))
+
     # --- measuring nodes (hardware + protocol at protocol_stack[0]) ----------
     node_kwargs = dict(qkdtype=cfg["qkdtype"], stack_size=1,
                        detector_efficiency=det0.get("efficiency", 1.0),
                        polarization_error_prob=pol_err,
                        noise_prob_per_round=noise_prob,
                        anti_correlated=anti)
-    alice = MeasuringNode("Alice", tl, "alice", num_rounds,
+    alice = MeasuringNode("Alice", tl, "alice", rounds_per_train,
                           seed=seed + 1, **node_kwargs)
-    bob = MeasuringNode("Bob", tl, "bob", num_rounds,
+    bob = MeasuringNode("Bob", tl, "bob", rounds_per_train,
                         seed=seed + 2, **node_kwargs)
 
     # --- source node (Charlie, untrusted relay) ------------------------------
-    mu = (ls_params.get("mean_photon_num")
-          if source_type == "eps_poisson" else None)
     charlie = EntanglementSourceNode("Charlie", tl,
                                      dst_alice="Alice", dst_bob="Bob",
-                                     num_rounds=num_rounds,
+                                     num_rounds=rounds_per_train,
                                      frequency=frequency, seed=seed + 3,
                                      wavelength_nm=wavelength_nm,
                                      bell_state=bell_state,
@@ -515,142 +607,107 @@ def _run_entanglement_qkd(
         if loss_parameters is not None:
             # existing single source of truth for the FSO loss recipe
             return _compute_loss(dist, ls_params, loss_parameters)
-        if loss is not None:
-            # fixed per-arm loss; split multiplicatively for sub-segments
-            return 1.0 - (1.0 - loss) ** (dist / distance)
+        if loss is not None and total_distance > 0:
+            # fixed end-to-end loss; split multiplicatively per segment
+            return 1.0 - (1.0 - loss) ** (dist / total_distance)
         return None  # channel falls back to the attenuation formula
 
     qc_common = dict(attenuation=attenuation, frequency=frequency,
                      polarization_fidelity=1.0)
 
-    qc_bob = QuantumChannel("qc_charlie_bob", tl, distance=distance,
-                            loss=seg_loss(distance), **qc_common)
-    qc_bob.set_ends(charlie, "Bob")
-
     eve = None
     if with_eve:
         # Fork-native mechanism (same as the prepare-and-measure Eve path):
         # EveQuantumChannel inserts the generic EveNode transparently.
+        # `eve_position` is the fraction of the Charlie -> Bob ARM.
         eve = EveNode("Eve", tl, intercept_rate=eve_intercept_rate,
                       seed=seed + 9)
-        d1 = distance * eve_position
-        d2 = distance * (1.0 - eve_position)
+        d1 = arm_cb * eve_position
+        d2 = arm_cb * (1.0 - eve_position)
         qc_alice = EveQuantumChannel(
-            "qc_charlie_alice", tl, eve_node=eve,
-            attenuation=attenuation, distance=distance,
+            "qc_charlie_bob", tl, eve_node=eve,
+            attenuation=attenuation, distance=arm_cb,
             frequency=frequency, eve_position=eve_position,
             loss_seg1=seg_loss(d1), loss_seg2=seg_loss(d2),
             pf_seg1=1.0, pf_seg2=1.0,
         )
     else:
-        qc_alice = QuantumChannel("qc_charlie_alice", tl, distance=distance,
-                                  loss=seg_loss(distance), **qc_common)
-    qc_alice.set_ends(charlie, "Alice")
+        qc_alice = QuantumChannel("qc_charlie_bob", tl, distance=arm_cb,
+                                  loss=seg_loss(arm_cb), **qc_common)
+    qc_alice.set_ends(charlie, "Bob")
 
-    # --- classical channels (Alice <-> Bob, path through Charlie) ------------
-    cc_ab = ClassicalChannel("cc_alice_bob", tl, distance=2 * distance)
+
+    qc_bob = QuantumChannel("qc_charlie_alice", tl, distance=arm_ac,
+                            loss=seg_loss(arm_ac), **qc_common)
+    qc_bob.set_ends(charlie, "Alice")
+
+    # --- classical channels (Alice <-> Bob, over the full separation) --------
+    cc_ab = ClassicalChannel("cc_alice_bob", tl, distance=total_distance)
     cc_ab.set_ends(alice, "Bob")
-    cc_ba = ClassicalChannel("cc_bob_alice", tl, distance=2 * distance)
+    cc_ba = ClassicalChannel("cc_bob_alice", tl, distance=total_distance)
     cc_ba.set_ends(bob, "Alice")
 
     # --- pair the protocols (BB84-style helper from the registry) ------------
     cfg["pair_fn"](alice.protocol_stack[0], bob.protocol_stack[0],
                    anti_correlated=anti)
+    alice_proto = alice.protocol_stack[0]
+    # simulation-side handle used to size/launch the emission trains
+    alice_proto.attach_source(charlie.source)
 
-    # --- schedule -------------------------------------------------------------
+    # --- schedule: SAME entry point as BB84/B92/COW --------------------------
     tl.init()
-    charlie.source.start(start_time=0)
-
-    period = int(round(1e12 / frequency))
-    # Artificial padding so the last photons/messages are still in flight
-    # when the classical phase starts. It is NOT physical time: it is
-    # subtracted again before the latency is reported (see below).
-    slack_ps = 5 * 10 ** 9
-    quantum_end = num_rounds * period + slack_ps
-    tl.schedule(Event(quantum_end - 2, Process(alice, "apply_noise_counts", [])))
-    tl.schedule(Event(quantum_end - 1, Process(bob, "apply_noise_counts", [])))
-    tl.schedule(Event(quantum_end, Process(alice.protocol_stack[0],
-                                           "announce_bases", [])))
+    tl.schedule(Event(0, Process(alice_proto, "push",
+                                 [keysize, key_num, 6e12])))
     tl.run()
 
-    # --- metrics ---------------------------------------------------------------
-    alice_proto = alice.protocol_stack[0]
-    bob_proto = bob.protocol_stack[0]
-    key_a, key_b = alice_proto.key, bob_proto.key
-    n_compare = min(len(key_a), len(key_b))
-    mismatches = sum(1 for k in range(n_compare) if key_a[k] != key_b[k])
-    key_error_rate = mismatches / n_compare if n_compare else 0.0
+    # --- metrics: the SHARED estimator, no dedicated block -------------------
+    # Identical function, identical denominator (send_bits_length = qubits
+    # emitted per train) => R_sk and R_s are in bits per qubit sent for the
+    # five protocols alike.
+    qber, throughputs, latency, skr, rs = _collect_metrics(alice_proto, f_ec)
 
-    metrics = alice_proto.metrics
-    if cfg["qkdtype"] == 3:                      # BBM92: sampled QBER
-        e_est = metrics.get("qber", 0.0)
-    else:                                        # E91: security from CHSH;
-        # the QBER estimate here is only indicative (a formal
-        # device-independent proof is out of scope).
-        e_est = key_error_rate
-    secure_fraction = 1.0 - f_ec * binary_entropy(e_est) - binary_entropy(e_est)
-    secure_fraction = max(0.0, secure_fraction)
+    mean_qber = _safe_mean(qber, default=0.0)
+    secure_fraction = max(0.0, 1.0 - f_ec * binary_entropy(mean_qber)
+                          - binary_entropy(mean_qber))
 
-    sifted_len = metrics.get("sifted_len", metrics.get("key_rounds_len", 0))
-    #quantum_time_s = num_rounds / frequency if frequency else 0.0
-    # rs: sifted bits per emitted round; skr: asymptotic secure bits/s
-
-    # ── UNITS (must match the prepare-and-measure contract) ──
-    # rs  : sifted bits per emitted round      [bits/qubit]
-    # skr : secure bits per emitted round      [bits/qubit]  <- NOT bits/s
-    # The sifting factor is the SAME quantity in both (sifted_len), so
-    # skr/rs == secure_fraction exactly as in _collect_metrics. The bits
-    # publicly revealed for the QBER sample (BBM92, SAMPLE_DIVISOR) are a
-    # finite-size cost outside the asymptotic Eq. (2.11) and are excluded
-    # here, just as BB84/B92 pay no sample cost in _collect_metrics; the
-    # sample-discounted value is exported as `skr_key_basis`.
-
-
-    rs = sifted_len / num_rounds if num_rounds else 0.0
-    skr = rs * secure_fraction
-    skr_key_basis = (n_compare / num_rounds) * secure_fraction if num_rounds else 0.0
-    skr_bits_per_s = skr * frequency          # diagnostic only [bits/s]
-    
-    # Latency: physical time from the first emission to the established
-    # key (quantum phase + classical sifting round trip), with the
-    # artificial `slack_ps` padding removed. Same meaning as the
-    # prepare-and-measure `protocol.latency` (time to the first key).
-    latency = max(0.0, (tl.now() - slack_ps)) * 1e-12
-    # Throughput on the SAME time base as the P&M path (which divides by
-    # the full elapsed time of the key, classical exchange included),
-    # instead of the bare quantum-emission window.
-    quantum_time_s = num_rounds / frequency if frequency else 0.0
-    throughputs = (sifted_len / latency) if latency > 0 else 0.0
-
-    # Channel loss reported end to end (Alice--Bob = 2*distance), mirroring
-    # the composition already used on the Eve path of the P&M runner:
-    #     L_total = 1 - (1 - L_arm)^2
+    # Channel loss reported end to end (Alice--Bob through Charlie):
+    #     L_total = 1 - (1 - L_ac) * (1 - L_cb)
     # `seg_loss` may legitimately return None (attenuation-formula fallback).
-    loss_arm = seg_loss(distance)
-    loss_total = (None if loss_arm is None
-                  else 1.0 - (1.0 - loss_arm) ** 2)
+    loss_ac, loss_cb = seg_loss(arm_ac), seg_loss(arm_cb)
+    loss_total = (None if (loss_ac is None or loss_cb is None)
+                  else 1.0 - (1.0 - loss_ac) * (1.0 - loss_cb))
 
     result = dict(
         # ── shared metric contract (consumed by _worker/_unpack) ──
-        qber=e_est, skr=skr, rs=rs, loss=loss_total,
-        throughputs=throughputs,
-        latency=latency,
+        qber=qber, skr=skr, rs=rs, loss=loss_total,
+        throughputs=throughputs, latency=latency,
         # ── entanglement diagnostics ──
         protocol=("BBM92" if cfg["qkdtype"] == 3 else "E91"),
-        with_eve=with_eve, bell_state=bell_state, num_rounds=num_rounds,
-        detected_alice=len(alice.records), detected_bob=len(bob.records),
+        with_eve=with_eve, bell_state=bell_state,
+        # `num_rounds` survives as a DERIVED quantity: it is counted, never
+        # configured (num_trains * rounds_per_train).
+        num_rounds=alice_proto.num_rounds,
+        num_trains=alice_proto.num_trains,
+        rounds_per_train=rounds_per_train,
+        keys_generated=len(alice_proto.error_rates),
+        keysize=keysize,
+        detected_alice=alice.detected_total, detected_bob=bob.detected_total,
         noise_counts=(alice.noise_counts, bob.noise_counts),
         eve_intercepted=(eve.intercepted_count if eve else 0),
-        sifted_len=sifted_len, key_len=n_compare,
-        key_error_rate=key_error_rate,
+        sampled_qber=_safe_mean(alice_proto.sampled_qbers),
+        key_error_rate=mean_qber,
         secure_fraction=secure_fraction, f_ec=f_ec,
         # unit-explicit extras (not part of the shared CSV contract)
-        skr_bits_per_s=skr_bits_per_s, skr_key_basis=skr_key_basis,
-        loss_per_arm=loss_arm, quantum_time_s=quantum_time_s,
+        skr_bits_per_s=skr * frequency,
+        loss_ac=loss_ac, loss_cb=loss_cb,
+        distance_ac=arm_ac, distance_cb=arm_cb, distance=total_distance,
+        charlie_position=(arm_ac / total_distance if total_distance else None),
+        quantum_time_s=alice_proto.num_rounds / frequency if frequency else 0.0,
         raw_end_time_s=tl.now() * 1e-12,
     )
     if cfg.get("needs_chsh"):
-        result["chsh_S"] = metrics.get("chsh_S", np.nan)
+        # per-train Bell parameters (computed by Alice) averaged over the run
+        result["chsh_S"] = _safe_mean(alice_proto.chsh_values)
     return result
 
 # thin wrappers, symmetric with simulation_BB84 / simulation_B92 / ...
@@ -925,9 +982,13 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
             "eve_position",
             "interferometer_phase_error",
             "phase_noise_coefficient",
-            # entanglement-only kwargs of run_qkd_simulation (BBM92/E91)
-            "num_rounds",
             "f_ec",
+            # entanglement-only kwargs of run_qkd_simulation (BBM92/E91).
+            # NOTE: there is no "num_rounds" knob any more -- the emission
+            # rounds are derived from `keysize` (sweep "keysize" instead).
+            "charlie_position",
+            "distance_ac",
+            "distance_cb",
             "bell_state",
         ]:
             spec["kwarg_override"] = {sweep_var: val}
@@ -1189,24 +1250,28 @@ def run_simulation():
 
     env = default_environment()
     common = env["common"]
-    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "num_rounds": 10000, "f_ec": 1.0}
+    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "f_ec": 1.0}
     site_altitude = env["site"]["site_altitude"]
 
+    # `distance` is the total Alice--Bob separation for EVERY protocol; for
+    # BBM92/E91 the source sits at `charlie_position` along that link.
     sim_variable("distance", range(100, 2001, 100),
                  keysize=10000, **common)
 
     #sim_variable("distance", range(1000, 100001, 1000),
     #             keysize=10000, **common)
 
+    # Single keysize sweep for BOTH families: the entanglement protocols are
+    # keysize-oriented too (the emission rounds are derived from it).
     sim_variable("keysize",
                  [20, 45, 50, 100, 200, 400, 800, 1600,
-                  5000, 20000, 40000, 80000, 100000], protocols=PREPARE_MEASURE_PROTOCOLS,
+                  5000, 20000, 40000, 80000, 100000],
                  **common)
-                 
-    sim_variable("num_rounds",
-                 [20, 45, 50, 100, 200, 400, 800, 1600,
-                  5000, 20000, 40000, 80000, 100000], protocols=ENTANGLEMENT_PROTOCOLS,
-                 **common)
+
+    # Where the untrusted source sits along the Alice--Bob link.
+    sim_variable("charlie_position",
+                 [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                 keysize=10000, protocols=ENTANGLEMENT_PROTOCOLS, **common)
 
     sim_variable("f_ec",
                  [1.0,1.05,1.10,1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.20,1.22],
@@ -1234,6 +1299,9 @@ def run_simulation():
 
     sim_variable("precipitation_rate", [0.1*mmh, 1*mmh, 5*mmh, 10*mmh, 20*mmh, 30*mmh], keysize=10000, **common)
     sim_variable("interferometer_phase_error", [0,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,10.0,100.0], keysize=10000, protocols=["COW","COW+Eve"], **common)
+    # eve_position: fraction of the Alice--Bob link for the P&M protocols and
+    # of the Charlie->Bob ARM for the entanglement ones (that is the arm Eve
+    # attacks; see _run_entanglement_qkd).
     sim_variable("eve_position", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9], keysize=10000, protocols=["BB84+Eve","B92+Eve","COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
 
     # -- Sweep #n: scenario by hour of day (site bound by the shared builder).

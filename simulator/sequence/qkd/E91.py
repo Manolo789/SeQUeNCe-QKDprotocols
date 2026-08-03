@@ -87,9 +87,14 @@ def pair_e91_protocols(sender: "E91", receiver: "E91",
 class E91(BaseEntanglementQKD):
     """Implementation of the E91 protocol (see module docstring).
 
-    Metrics (on Alice's side after the exchange): ``chsh_S`` (signed CHSH
+    Metrics (on Alice's side after each train): ``chsh_S`` (signed CHSH
     value; the security verdict uses |S| > 2 for both Bell states) and
-    ``key_rounds_len``.
+    ``key_rounds_len``; the per-train values are also accumulated in
+    ``chsh_values``.
+
+    Key generation is keysize-oriented and lives in the base class: the
+    sifted bits of successive trains accumulate until ``keysize`` bits are
+    available (see :class:`~sequence.qkd.entanglement.BaseEntanglementQKD`).
     """
 
     #: three analyser angles per party [degrees].
@@ -109,7 +114,9 @@ class E91(BaseEntanglementQKD):
                       if (alice_settings[i],
                           self.owner.records[i][0]) in self.KEY_PAIRS]
         self.key_rounds = key_rounds
-        self.key = [self._bit(i) for i in key_rounds]
+        # bits of THIS train; the keysize-oriented driver in the base class
+        # accumulates them into `key_bits` until a full key is available.
+        self.train_key_bits = [self._bit(i) for i in key_rounds]
         self.metrics = {"key_rounds_len": len(key_rounds)}
 
         # test rounds (public): Bob reveals setting + outcome for the CHSH
@@ -126,8 +133,11 @@ class E91(BaseEntanglementQKD):
     # ----- Alice: CHSH metric (key already adopted by the base class) --------
     def _alice_finish(self, msg: EntQKDMessage):
         test_data = msg.kwargs["test_data"]
-        self.metrics = {"chsh_S": self._chsh(test_data),
+        chsh_S = self._chsh(test_data)
+        self.metrics = {"chsh_S": chsh_S,
                         "key_rounds_len": len(self.key_rounds)}
+        # per-train Bell parameter; averaged over trains by the runner
+        self.chsh_values.append(chsh_S)
 
     # ----- CHSH ---------------------------------------------------------------
     def _chsh(self, test_data_bob):

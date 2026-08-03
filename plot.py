@@ -110,7 +110,7 @@ X_LABELS = {
     "hour":                       "Hora do dia [h]",
     # entanglement-based sweeps (BBM92 / E91)
     "f_ec":                       "Eficiência da correção de erros (f_EC)",
-    "num_rounds":                 "Número de rodadas da fonte de pares",
+    "charlie_position":           "Posição de Charlie (fração da distância Alice–Bob)",
     "mean_photon_num":            "Número médio de fótons por pulso (μ)",
     "bell_state":                 "Estado de Bell da fonte",
 }
@@ -131,7 +131,7 @@ X_SCALE_OVERRIDE = {
 # in QKD_Extension.py; the values below are those base results (hour=12, RH=47%,
 # T=298.15 K, wind=3.2 m/s, height=8 m, sensor Ø=1e-4 m, f=0.7004 m).
 BASE_PARAMS = {
-    "distance":                   "Distância=700 m",
+    "distance":                   "Distância Alice–Bob=700 m",
     "keysize":                    "Tamanho de chave=10000 bits",
     "atm_visibility":             "Visib. atm.=10000 m",
     "C_n2":                       "Cₙ²=5,77×10⁻¹⁴ m^(-2/3)",
@@ -152,7 +152,7 @@ BASE_PARAMS = {
     # entanglement-based operating point (BBM92 / E91), mirroring
     # run_simulation()/run_entanglement_simulation() in QKD_Extension.py.
     "f_ec":                       "f_EC=1,1",
-    "num_rounds":                 "Rodadas=10000",
+    "charlie_position":           "Posição de Charlie=0,1",
 }
 
 # Short sweep names for the legend of the parallel-coordinates grid.
@@ -177,7 +177,7 @@ SWEEP_SHORT = {
     "temperature":                "Temperatura",
     "wind_speed_perp":            "Vento perp.",
     "f_ec":                       "f_EC",
-    "num_rounds":                 "Nº rodadas",
+    "charlie_position":           "Posição Charlie",
 }
 
 # Metrics shown (in this order) in the parallel-coordinates grid, with
@@ -270,16 +270,15 @@ def _legenda(metric: str, proto: str, suffix: str) -> str:
     return base + (" com Eve" if suffix else "")
 
 
-def _skr_ylabel(protocols) -> str:
-    """Eixo de R_sk com a normalizacao correta da familia desenhada.
+def _skr_ylabel(protocols=None) -> str:
+    """Eixo de R_sk — mesma unidade nas DUAS familias.
 
-    R_sk e adimensional (bits por disparo) nas DUAS familias, mas o
-    "disparo" e um pulso enviado no prepara-e-mede e um PAR emitido pela
-    fonte nos protocolos de emaranhamento.
+    Desde que os protocolos de emaranhamento passaram a ser orientados a
+    keysize, ambas as famílias são pós-processadas pelo MESMO estimador
+    (``QKD_Extension._collect_metrics``) com o MESMO denominador
+    (``send_bits_length``), de modo que R_sk e R_s são
+    dados em bits por qubit enviado para os cinco protocolos.
     """
-    if protocols and all(p.split("+")[0] in ENT_PROTOCOLS for p in protocols):
-        return ("log₁₀ Taxa de chave secreta (R_sk)\n"
-                "[bits por par emitido]")
     return ("log₁₀ Taxa de chave secreta (R_sk)\n"
             "[bits por qubit enviado]")
 
@@ -446,12 +445,14 @@ def plot_sweep(df, filename, title=None):
     """Generate every applicable figure for one sweep CSV.
 
     Prepare-and-measure (BB84/B92/COW) and entanglement-based (BBM92/E91)
-    protocols are drawn on SEPARATE R_sk/QBER/R_s figures: they use different
-    per-shot conventions (bits per qubit vs. per emitted pair) and different
-    QBER scales, so overlaying all five on one twin-axis panel is unreadable.
-    Each family is only emitted when it actually has columns in this CSV, so a
-    P&M-only sweep (e.g. interferometer_phase_error) or an entanglement-only
-    sweep (e.g. f_ec, num_rounds) still produces exactly the relevant figures.
+    protocols are drawn on SEPARATE R_sk/QBER/R_s figures. Both families now
+    share the same estimator and the same denominator (R_sk and R_s in bits
+    per qubit sent), so the values ARE directly comparable; the split is kept
+    only for readability, since ten curves on one twin-axis panel is
+    unreadable. Each family is only emitted when it actually has columns in
+    this CSV, so a P&M-only sweep (e.g. interferometer_phase_error) or an
+    entanglement-only sweep (e.g. charlie_position) still produces exactly
+    the relevant figures.
     """
     sweep_var = df.columns[0]
     x_scale = _x_scale(sweep_var, df[sweep_var])
@@ -500,9 +501,11 @@ def plot_dual_graph(df_left, df_right, suffix, title, filename,
                      show_left_ylabel=True, show_right_ylabel=True):
         sweep_var = df.columns[0]
         x = np.asarray(df[sweep_var], dtype=float)
-        # This dual figure compares distance vs. key size; ``keysize`` is a
-        # prepare-and-measure concept (entanglement uses ``num_rounds``), so the
-        # comparison is restricted to BB84/B92/COW to stay meaningful.
+        # This dual figure compares distance vs. key size. Both axes now mean
+        # the same thing for every protocol (``distance`` = Alice--Bob
+        # separation, ``keysize`` = requested key length), but the panel is
+        # kept to the prepare-and-measure family for readability; swap in
+        # ENT_PROTOCOLS (or PROTOCOLS) to draw the entanglement curves.
         protocols = _present_protocols(df, suffix, PM_PROTOCOLS)
         ax_top.set_title(subtitle, fontsize=fontsize)
 
@@ -824,7 +827,7 @@ SWEEPS = [
     "wind_speed_perp",
     # entanglement-only sweeps (BBM92 / E91); absent CSVs are skipped silently.
     "f_ec",
-    "num_rounds",
+    "charlie_position",
 ]
 
 

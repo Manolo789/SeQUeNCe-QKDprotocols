@@ -16,6 +16,34 @@ The implementation includes a free-space optical channel model for QKD protocols
 
 The implementation of **BBM92** and **E91** extends the simulator with entanglement-based QKD protocols, enabling the evaluation of quantum communication systems that rely on entangled photon pairs. The **E91** implementation also supports the analysis of Bell inequality (CHSH) violations, allowing security assessment through quantum correlations.
 
+### Link geometry and key-size-driven operation
+
+For **every** protocol in the registry, `distance` is the **total Alice–Bob
+separation**. For the entanglement-based protocols the untrusted source
+(Charlie) sits between the two parties and the arms follow from
+`charlie_position`:
+
+```
+distance = distance_ac + distance_cb
+distance_ac = charlie_position * distance
+distance_cb = (1 - charlie_position) * distance
+```
+
+Setting `charlie_position=None` takes the two arms from the optional
+`distance_ac` / `distance_cb` parameters instead (asymmetric links given
+directly rather than as a fraction).
+
+The entanglement-based protocols are **key-size driven**, exactly like the
+prepare-and-measure ones: `push(keysize, key_num, run_time)` starts the
+generation, the sifted bits of successive emission trains accumulate in
+`key_bits`, and a key is extracted whenever `len(key_bits) >= keysize`,
+repeating until the runtime or `key_num` is exhausted. There is no "number of
+rounds" knob — the emission rounds are a *derived* quantity (reported as
+`num_rounds` for diagnostics). As a result both families are post-processed by
+the **same** secure-key-rate estimator with the **same** denominator, so `R_s`
+and `R_sk` are expressed in bits per qubit sent for all five protocols and are
+directly comparable.
+
 ## Features
 
 - Implementation of the **B92**, **COW**, **BBM92**, and **E91** QKD protocols.

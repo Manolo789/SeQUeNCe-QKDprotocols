@@ -777,8 +777,9 @@ class EntanglementSourceNode(Node):
 
     Untrusted relay for the entanglement-based QKD protocols (BBM92 and
     E91, qkdtypes 3 and 4): it only distributes Bell pairs, one photon to
-    each measuring node (see Kržič dissertation §2.1.2 -- this doubles the
-    range w.r.t. BB84 because ``distance`` is the length of EACH arm).
+    each measuring node (see Kržič dissertation §2.1.2 -- each arm carries
+    only part of the Alice--Bob separation, which is what extends the
+    reachable range w.r.t. BB84).
 
     The hardware (a :class:`~sequence.qkd.entanglement.BellPairSource`) is
     registered in ``components`` and exposed as ``self.source``, in the same
@@ -791,7 +792,7 @@ class EntanglementSourceNode(Node):
     """
 
     def __init__(self, name: str, timeline: "Timeline", dst_alice: str,
-                 dst_bob: str, num_rounds: int, frequency: float = 1e6,
+                 dst_bob: str, num_rounds: int = 0, frequency: float = 1e6,
                  seed=None, wavelength_nm: float = 810,
                  bell_state: str = "psi_minus", mean_photon_num=None,
                  component_templates=None):
@@ -802,7 +803,9 @@ class EntanglementSourceNode(Node):
             timeline (Timeline): simulation timeline.
             dst_alice (str): name of the next node on Alice's arm.
             dst_bob (str): name of the next node on Bob's arm.
-            num_rounds (int): number of emission rounds.
+            num_rounds (int): default rounds per emission train. Optional:
+                the QKD protocol sizes each train from the requested key
+                size and passes it to ``BellPairSource.start``.
             frequency (float): pair generation rate [Hz].
             seed (int): seed for the random number generator.
             wavelength_nm (float): photon wavelength [nm].
@@ -848,25 +851,35 @@ class MeasuringNode(Node):
     in the library); (4) record ``(setting, outcome)`` under the photon's
     ``round_index`` coincidence tag.
 
-    ``apply_noise_counts()`` must be called after the quantum window: every
-    round WITHOUT a true detection gets a noise count (random outcome) with
-    probability ``noise_prob_per_round`` = (S_dark + S_back) * gate. This is
-    how accidental coincidences (Kržič Eq. 2.5) arise in the round-tag
-    approximation, so daylight background produces QBER > 0 without any Eve.
+    ``apply_noise_counts()`` must be called after the quantum window of each
+    train: every round WITHOUT a true detection gets a noise count (random
+    outcome) with probability ``noise_prob_per_round`` = (S_dark + S_back) *
+    gate. This is how accidental coincidences (Kržič Eq. 2.5) arise in the
+    round-tag approximation, so daylight background produces QBER > 0
+    without any Eve.
+
+    Emission is organised in TRAINS (the entanglement analog of the BB84
+    pulse train): :meth:`start_train` re-arms the node before each one, so
+    ``settings``/``records`` always refer to the train in progress while the
+    key accumulates inside the protocol.
 
     Attributes:
         name (str): label for node instance.
         timeline (Timeline): timeline for simulation.
         role (str): "alice" or "bob" (selects the analyser angle set).
         angles (list[float]): analyser angles [rad] for this node.
-        settings (np.ndarray): pre-drawn analyser setting per round.
-        records (dict[int, tuple[int, int]]): round -> (setting, outcome).
-        noise_counts (int): number of rounds filled by noise counts.
+        settings (np.ndarray): pre-drawn analyser setting per round of the
+            current train.
+        records (dict[int, tuple[int, int]]): round -> (setting, outcome),
+            for the current train only.
+        train_index (int): index of the train currently being measured.
+        noise_counts (int): number of rounds filled by noise counts
+            (cumulative over all trains).
         protocol_stack (list): sifting protocol at layer 0 (BBM92 or E91).
     """
 
     def __init__(self, name: str, timeline: "Timeline", role: str,
-                 num_rounds: int, qkdtype: int = 3, stack_size: int = 1,
+                 num_rounds: int = 0, qkdtype: int = 3, stack_size: int = 1,
                  detector_efficiency: float = 0.9, seed=None,
                  polarization_error_prob: float = 0.0,
                  noise_prob_per_round: float = 0.0,
@@ -877,7 +890,8 @@ class MeasuringNode(Node):
             name (str): label for the node instance.
             timeline (Timeline): simulation timeline.
             role (str): "alice" or "bob".
-            num_rounds (int): number of source emission rounds.
+            num_rounds (int): rounds of the first emission train; every
+                subsequent train re-arms the node via :meth:`start_train`.
             qkdtype (int): 3 (BBM92 QKD protocol), 4 (E91 QKD protocol).
             stack_size (int): 0 = no protocol, >=1 = sifting protocol at
                 layer 0 (cascade/error-correction not yet supported for
@@ -917,6 +931,12 @@ class MeasuringNode(Node):
         self.settings = self.generator.integers(0, len(self.angles),
                                                 num_rounds)
         self.records: dict = {}
+        #: index of the train currently being measured; photons tagged with
+        #: any other train are ignored (see :meth:`receive_qubit`).
+        self.train_index: int = 0
+        #: true detections over ALL trains (``records`` only holds the
+        #: current train), kept as a diagnostic.
+        self.detected_total: int = 0
 
         # add protocols (layer 0 = sifting, as in QKDNode)
         self.protocol_stack = [None] * 5
@@ -932,13 +952,36 @@ class MeasuringNode(Node):
                 f"protocol of MeasuringNode {self.name} was not paired " \
                 "(call pair_bbm92_protocols / pair_e91_protocols)"
 
+    def start_train(self, num_rounds: int, train_index: int) -> None:
+        """Re-arm the node for a new emission train.
+
+        Draws a fresh set of analyser settings and clears the coincidence
+        records, so ``round_index`` can restart at 0 on every train and the
+        memory footprint stays bounded by the train length (the key itself
+        accumulates in the protocol, not here). ``noise_counts`` keeps
+        accumulating across trains.
+
+        Args:
+            num_rounds (int): rounds in the new train.
+            train_index (int): tag carried by the photons of the new train.
+        """
+        self.num_rounds = int(num_rounds)
+        self.train_index = int(train_index)
+        self.settings = self.generator.integers(0, len(self.angles),
+                                                self.num_rounds)
+        self.records = {}
+
     def receive_qubit(self, src: str, photon) -> None:
         """Measure an arriving photon in the pre-drawn analyser setting."""
         if getattr(photon, "is_null", False):
             # photon lost upstream (e.g. forwarded by EveNode as null)
             return
+        # stragglers from a previous train must never be recorded as a
+        # round of the current one (round indices restart at every train)
+        if getattr(photon, "train_index", self.train_index) != self.train_index:
+            return
         i = getattr(photon, "round_index", None)
-        if i is None or i in self.records:
+        if i is None or i >= self.num_rounds or i in self.records:
             return
         # detector efficiency: sometimes the photon is not detected (loss)
         if self.generator.random() > self.detector_efficiency:
@@ -951,6 +994,7 @@ class MeasuringNode(Node):
                 and self.generator.random() < self.polarization_error_prob):
             outcome = int(self.generator.integers(0, 2))
         self.records[i] = (setting, int(outcome))
+        self.detected_total += 1
 
     def apply_noise_counts(self) -> None:
         """Fill undetected rounds with dark/background noise counts.

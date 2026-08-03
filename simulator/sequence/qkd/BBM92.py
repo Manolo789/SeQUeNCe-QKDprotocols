@@ -84,7 +84,12 @@ class BBM92(BaseEntanglementQKD):
 
     Sifting keeps same-basis rounds; a public sample estimates the QBER and
     is discarded from the key on both sides. Metrics (on Alice's side after
-    the exchange): ``sifted_len``, ``sample_len``, ``qber``.
+    each train): ``sifted_len``, ``sample_len``, ``qber``; the per-train
+    sample QBER is also accumulated in ``sampled_qbers`` as a diagnostic.
+
+    Key generation is keysize-oriented and lives in the base class: the
+    sifted bits of successive trains accumulate until ``keysize`` bits are
+    available (see :class:`~sequence.qkd.entanglement.BaseEntanglementQKD`).
     """
 
     #: Two conjugate bases: Z = 0 deg (rectilinear), X = 45 deg (diagonal).
@@ -112,7 +117,9 @@ class BBM92(BaseEntanglementQKD):
         sample_set = set(sample)
         key_rounds = [i for i in sift_rounds if i not in sample_set]
         self.key_rounds = key_rounds
-        self.key = [self._bit(i) for i in key_rounds]
+        # bits of THIS train; the keysize-oriented driver in the base class
+        # accumulates them into `key_bits` until a full key is available.
+        self.train_key_bits = [self._bit(i) for i in key_rounds]
         self.metrics = {"sifted_len": len(sift_rounds)}
 
         reply = EntQKDMessage(EntQKDMsgType.SIFT_ANNOUNCE, self.peer_proto,
@@ -130,3 +137,8 @@ class BBM92(BaseEntanglementQKD):
         qber = errors / len(sample) if sample else 0.0
         self.metrics = {"sifted_len": msg.kwargs["sifted_len"],
                         "sample_len": len(sample), "qber": qber}
+        # Per-train diagnostic. The QBER that feeds the SHARED key-rate
+        # estimator is the error rate of the extracted key (computed by the
+        # base class, exactly as BB84/B92/COW do), so both protocol families
+        # are post-processed by the same code with the same denominator.
+        self.sampled_qbers.append(qber)
