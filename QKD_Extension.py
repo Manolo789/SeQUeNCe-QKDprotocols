@@ -1324,7 +1324,7 @@ def default_environment():
         ls_params=ls_params, ls_params_cow=ls_params_cow,
         detector_params=detector_params,
         detector_params_cow=detector_params_cow,
-        key_num=10,
+        key_num=1,
         loss_parameters=loss_parameters,
         thermal_params=thermal_params,
         extra_kwargs=extra_kwargs,
@@ -1365,7 +1365,6 @@ def run_simulation():
 
     env = default_environment()
     common = env["common"]
-    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "f_ec": 1.0}
     # charlie_position explícito: o default da assinatura vale para TODAS as
     # varreduras, e 0.1 (fonte a 10% do enlace) não é a configuração
     # simétrica que o README usa como referência para comparar as famílias. No entanto,
