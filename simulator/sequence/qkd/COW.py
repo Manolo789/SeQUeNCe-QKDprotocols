@@ -347,8 +347,11 @@ class COW(StackProtocol):
             num_symbols = int(self.light_time * self.ls_freq / 2)
 
             # Randomly assign data bits and flag decoy symbols
-            bit_list  = numpy.random.choice([0, 1], num_symbols)
-            is_decoy  = numpy.random.random(num_symbols) < self.decoy_rate
+            # CORREÇÃO: ver BB84.begin_photon_pulse -- o gerador global do
+            # NumPy não é semeado por Node.set_seed().
+            rng = self.owner.get_generator()
+            bit_list  = rng.choice([0, 1], num_symbols)
+            is_decoy  = rng.random(num_symbols) < self.decoy_rate
             
             decoy_pos = [int(i) for i, d in enumerate(is_decoy) if d]
             self.bit_lists.append(bit_list.tolist())

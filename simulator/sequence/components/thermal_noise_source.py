@@ -39,6 +39,8 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import math
 from typing import TYPE_CHECKING
 
+from numpy.random import default_rng
+
 if TYPE_CHECKING:
     from ..kernel.timeline import Timeline
 
@@ -67,11 +69,22 @@ class ThermalNoiseSource(Entity):
         active (bool)    : liga/desliga a fonte
     """
 
-    def __init__(self, name: str, timeline: "Timeline", n_B: float, frequency: float, encoding_type: dict = None, detection_gate: float = None) -> None:
+    def __init__(self, name: str, timeline: "Timeline", n_B: float, frequency: float, encoding_type: dict = None, detection_gate: float = None, seed: int = None) -> None:
         Entity.__init__(self, name, timeline)
 
         if encoding_type is None:
             encoding_type = polarization
+
+        # CORREÇÃO (reprodutibilidade): esta Entity NÃO é registrada em um
+        # Node, logo `self.owner is None` e `Entity.get_generator()` cai no
+        # ramo `default_rng()` -- um gerador NOVO e SEM SEMENTE a cada
+        # chamada (uma vez por _schedule_next e uma por _random_state).
+        # Consequências: (a) a simulação deixa de ser reprodutível mesmo
+        # com alice.set_seed()/bob.set_seed() fixos; (b) instancia-se um
+        # Generator por fóton de fundo (custo desnecessário). Guardamos um
+        # gerador próprio e semeado, usado enquanto não houver `owner`.
+        self._rng = default_rng(seed)
+
 
         self.n_B = n_B
         self.frequency = frequency
@@ -114,6 +127,12 @@ class ThermalNoiseSource(Entity):
             self._arrival_rate = self.n_B / self.detection_gate
         else:
             self._arrival_rate = 0.0
+            
+    def get_generator(self):
+        """Gerador semeado da fonte (ou o do nó, se houver `owner`)."""
+        if hasattr(self.owner, "get_generator"):
+            return self.owner.get_generator()
+        return self._rng
 
     def init(self) -> None:
         """Agenda o primeiro evento de emissão de fóton de fundo."""

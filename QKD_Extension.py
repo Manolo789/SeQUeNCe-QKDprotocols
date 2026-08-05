@@ -254,15 +254,36 @@ def _n_background_photons(ls_params, thermal_params):
     )
 
 
-def _attach_thermal_noise(tl, detector, ls_params, thermal_params):
-    """Create and connect a ThermalNoiseSource to `detector`."""
+def _attach_thermal_noise(tl, qsdetector, ls_params, thermal_params, seed=0):
+    """Create and connect a ThermalNoiseSource to the receiver front end.
+
+    CORREÇÃO: o receptor é o QSDetector COMPLETO, e não ``detectors[0]``.
+    A versão anterior injetava o fóton de fundo diretamente no primeiro
+    detector, curto-circuitando o elemento de roteamento
+    (``BeamSplitter`` no QSDetectorPolarization, divisor t_B +
+    interferômetro no QSDetectorCOW). Isso tinha três efeitos:
+      * o estado de polarização aleatório sorteado em
+        ``ThermalNoiseSource._random_state`` era código morto;
+      * TODA contagem de fundo caía no detector 0, ou seja, sempre o
+        mesmo bit -> a contribuição da luz do céu para o QBER era
+        subestimada por ~2x e a chave crua ficava enviesada para 0;
+      * no COW o fundo nunca chegava a DM1/DM2, de modo que a
+        visibilidade da linha de monitoramento era insensível ao brilho
+        do céu.
+    ``QSDetector.get()`` já implementa o roteamento correto nos dois
+    casos, então basta registrá-lo como receptor.
+    """
     n_B = _n_background_photons(ls_params, thermal_params)
-    
-    encoding = detector.owner.encoding if hasattr(detector.owner, "encoding") else None
-    #src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding)
-    src = ThermalNoiseSource(name=f"thermal_{detector.name}", timeline=tl, n_B=n_B, frequency=ls_params["frequency"], encoding_type=encoding, detection_gate=thermal_params["detection_gate"])
+
+    owner = getattr(qsdetector, "owner", None)
+    encoding = owner.encoding if hasattr(owner, "encoding") else None
+    src = ThermalNoiseSource(name=f"thermal_{qsdetector.name}", timeline=tl,
+                             n_B=n_B, frequency=ls_params["frequency"],
+                             encoding_type=encoding,
+                             detection_gate=thermal_params["detection_gate"],
+                             seed=seed)
     src.init()
-    src.add_receiver(detector)
+    src.add_receiver(qsdetector)
     tl.entities[src.name] = src
     return src
 
@@ -323,8 +344,9 @@ def run_qkd_simulation(
     source_type=None, loss=None, thermal_params=None,
     phase_noise_coefficient=0, interferometer_phase_error=0.20,
     eve_intercept_rate=0.9, eve_position=0.5, loss_parameters=None,
-    charlie_position=0.1, distance_ac=None, distance_cb=None,
+    charlie_position=0.5, distance_ac=None, distance_cb=None,
     f_ec=1.0, bell_state="psi_minus", seed=0,
+    classical_delay_offset_ps=0.0, enforce_bell_violation=True,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
 
@@ -374,6 +396,8 @@ def run_qkd_simulation(
             eve_intercept_rate=eve_intercept_rate, eve_position=eve_position,
             runtime=runtime, keysize=keysize, key_num=key_num,
             f_ec=f_ec, bell_state=bell_state, seed=seed,
+            classical_delay_offset_ps=classical_delay_offset_ps,
+            enforce_bell_violation=enforce_bell_violation,
         )
 
     is_cow = cfg["qkdtype"] == 2
@@ -431,10 +455,17 @@ def run_qkd_simulation(
 
 
     # Classical channels.
+    # CORREÇÃO: o acréscimo fixo de 1e9 ps (= 1 ms) por perna clássica era
+    # aplicado APENAS aqui, e não em _run_entanglement_qkd. Como a latência
+    # física do enlace é ~3,5 us em 700 m, esse offset dominava a métrica e
+    # tornava Latency/Throughput incomparáveis entre as duas famílias (em
+    # metrics_variable-distance.csv o BBM92 aparece com throughput MAIOR
+    # que o BB84 apesar de ter metade da taxa peneirada). Agora o offset é
+    # explícito, compartilhado e nulo por padrão.
     cc0 = ClassicalChannel("cc0", tl, distance=distance)
     cc1 = ClassicalChannel("cc1", tl, distance=distance)
-    cc0.delay += 1e9
-    cc1.delay += 1e9
+    cc0.delay += classical_delay_offset_ps
+    cc1.delay += classical_delay_offset_ps
 
     # Nodes.
     node_kwargs = dict(stack_size=1, qkdtype=cfg["qkdtype"], source_type=src_type)
@@ -466,8 +497,8 @@ def run_qkd_simulation(
 
     tl.init()
     if thermal_params is not None:
-        bob_det = bob.components[bob.first_component_name].detectors[0]
-        _attach_thermal_noise(tl, bob_det, ls_params, thermal_params)
+        bob_qsd = bob.components[bob.first_component_name]
+        _attach_thermal_noise(tl, bob_qsd, ls_params, thermal_params, seed=seed + 7)
     tl.run()
 
     proto_obj = alice.protocol_stack[0]
@@ -514,7 +545,7 @@ def simulation_COW_Eve(*a, **kw):  return _unpack(run_qkd_simulation("COW+Eve", 
 #     counts and the gate come from the SAME detector_params contract used
 #     by BB84/B92/COW (dark_count [Hz], detection_gate_from_detector);
 #   * Eve via the fork's native EveQuantumChannel + generic EveNode on the
-#     Charlie -> Alice arm (the SAME photon object is forwarded, so the
+#     Charlie -> Bob arm (the SAME photon object is forwarded, so the
 #     collapse propagates to Bob's partner photon);
 #   * key generation driven by `push(keysize, key_num, run_time)` — the SAME
 #     entry point as BB84/B92/COW — so there is NO "number of rounds" knob:
@@ -544,6 +575,7 @@ def _run_entanglement_qkd(
     polarization_fidelity, source_type,
     eve_intercept_rate, eve_position,
     runtime, keysize, key_num, f_ec, bell_state, seed,
+    classical_delay_offset_ps=0.0, enforce_bell_violation=True,
 ):
     """Entanglement runner (see run_qkd_simulation Observations 3 and 4).
 
@@ -570,7 +602,18 @@ def _run_entanglement_qkd(
             else detection_gate_from_detector(det0.get("time_resolution", 1000)))
     n_B = (_n_background_photons(ls_params, thermal_params)
            if thermal_params is not None else 0.0)
-    noise_prob = n_B + det0.get("dark_count", 0) * gate
+    # CORREÇÃO: n_B é um NÚMERO MÉDIO de fótons de fundo por modo, não uma
+    # probabilidade de clique. Na família prepare-and-measure ele atravessa
+    # a eficiência do detector (ThermalNoiseSource -> Detector.get), logo a
+    # probabilidade efetiva é ~eta*n_B. Aqui ele era usado CRU, dando
+    # 1/eta = 1,54x mais fundo para BBM92/E91 do que para BB84/B92/COW e
+    # enviesando exatamente a comparação entre famílias que o README
+    # anuncia como "directly comparable". Aplicamos a mesma eficiência e a
+    # saturação de Poisson 1 - exp(-mu) (n_B pode passar de 1 nas
+    # varreduras de fov_solid_angle / receiver_radius).
+    det_eff = det0.get("efficiency", 1.0)
+    mu_noise = det_eff * n_B + det0.get("dark_count", 0) * gate
+    noise_prob = 1.0 - math.exp(-mu_noise)
     pol_err = max(0.0, 1.0 - polarization_fidelity)
 
     # --- train length: the entanglement analog of the BB84 pulse train ------
@@ -624,7 +667,7 @@ def _run_entanglement_qkd(
                       seed=seed + 9)
         d1 = arm_cb * eve_position
         d2 = arm_cb * (1.0 - eve_position)
-        qc_alice = EveQuantumChannel(
+        qc_bob = EveQuantumChannel(
             "qc_charlie_bob", tl, eve_node=eve,
             attenuation=attenuation, distance=arm_cb,
             frequency=frequency, eve_position=eve_position,
@@ -632,19 +675,21 @@ def _run_entanglement_qkd(
             pf_seg1=1.0, pf_seg2=1.0,
         )
     else:
-        qc_alice = QuantumChannel("qc_charlie_bob", tl, distance=arm_cb,
+        qc_bob = QuantumChannel("qc_charlie_bob", tl, distance=arm_cb,
                                   loss=seg_loss(arm_cb), **qc_common)
-    qc_alice.set_ends(charlie, "Bob")
+    qc_bob.set_ends(charlie, "Bob")
 
 
-    qc_bob = QuantumChannel("qc_charlie_alice", tl, distance=arm_ac,
+    qc_alice = QuantumChannel("qc_charlie_alice", tl, distance=arm_ac,
                             loss=seg_loss(arm_ac), **qc_common)
-    qc_bob.set_ends(charlie, "Alice")
+    qc_alice.set_ends(charlie, "Alice")
 
     # --- classical channels (Alice <-> Bob, over the full separation) --------
     cc_ab = ClassicalChannel("cc_alice_bob", tl, distance=total_distance)
+    cc_ab.delay += classical_delay_offset_ps      # mesmo offset da família P&M
     cc_ab.set_ends(alice, "Bob")
     cc_ba = ClassicalChannel("cc_bob_alice", tl, distance=total_distance)
+    cc_ba.delay += classical_delay_offset_ps
     cc_ba.set_ends(bob, "Alice")
 
     # --- pair the protocols (BB84-style helper from the registry) ------------
@@ -707,7 +752,15 @@ def _run_entanglement_qkd(
     )
     if cfg.get("needs_chsh"):
         # per-train Bell parameters (computed by Alice) averaged over the run
-        result["chsh_S"] = _safe_mean(alice_proto.chsh_values)
+        S = _safe_mean(alice_proto.chsh_values)
+        result["chsh_S"] = S
+        # CORREÇÃO: no E91 a testemunha de segurança é a violação de Bell,
+        # não apenas o QBER. Sem esta trava o CSV publica pontos com
+        # R_sk > 0 e |S| < 2 (ex.: metrics_variable-keysize.csv, keysize=20:
+        # R_sk-E91 = 0,100 com |S| = 1,375), isto é, chave "segura" a partir
+        # de correlações reproduzíveis por um modelo local.
+        if enforce_bell_violation and (np.isnan(S) or abs(S) <= 2.0):
+            result["skr"] = 0.0
     return result
 
 # thin wrappers, symmetric with simulation_BB84 / simulation_B92 / ...
@@ -789,8 +842,14 @@ def _build_tasks(points, point_to_spec, *, runtime, channel_parameters,
         for proto in protocols:
             cfg = PROTOCOL_REGISTRY[proto]
             ls_p  = {**ls_lookup[cfg["ls_key"]], **(ls_over or {})}
-            #det_p = det_lookup[cfg["det_key"]]
-            det_p = spec.get("detector_params", det_lookup[cfg["det_key"]])
+            # override por protocolo (preserva o nº de detectores de cada
+            # QSDetector: 2 para BB84/B92, 3 para o COW) e, como fallback,
+            # o override global usado por outras varreduras.
+            det_by_key = spec.get("detector_params_by_key")
+            if det_by_key is not None:
+                det_p = det_by_key[cfg["det_key"]]
+            else:
+                det_p = spec.get("detector_params", det_lookup[cfg["det_key"]])
 
             kwargs = _build_task_kwargs(
                 distance=distance, keysize=keysize,
@@ -920,7 +979,8 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
                  ls_params, ls_params_cow, detector_params, detector_params_cow,
                  key_num, loss_parameters, thermal_params,
                  keysize=10000, protocols=None, output_csv=None,
-                 max_workers=None, extra_kwargs=None):
+                 max_workers=None, extra_kwargs=None,
+                 site=None):
     """Parallel sweep over a single kwarg of run_qkd_simulation.
 
     Args:
@@ -946,6 +1006,17 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
     det_lookup = {"detector_params": detector_params,
                   "detector_params_cow": detector_params_cow}
 
+    # Contexto do sítio necessário para RECALCULAR as grandezas derivadas
+    # (u*, C_n2) quando T / P / altura / vento são varridos.
+    site = site or {}
+    site_altitude_for_sweeps = site.get("site_altitude", 0.0)
+    base_ground_wind = site.get("wind_speed", 3.2)
+    cn2_reference_hour = site.get("cn2_reference_hour", 12.0)
+    cn2_sunrise = site.get("sunrise", 6.0)
+    cn2_sunset = site.get("sunset", 18.0)
+    cn2_relative_humidity = site.get("relative_humidity", 47.0)
+
+
     #def point_to_spec(val):
     #    spec = {"sweep_var": sweep_var, "sweep_val": val}
     #    if sweep_var == "distance":
@@ -970,6 +1041,24 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
         tp = dict(thermal_params)
         ls_overrides = {}
         det_override = None
+        
+        def _override_detectors(key, value):
+            """Aplica `key=value` a TODOS os detectores de CADA protocolo.
+
+            CORREÇÃO: a versão anterior montava a lista a partir de
+            `detector_params` (2 detectores, layout BB84/B92) e a entregava
+            também ao COW, cujo QSDetectorCOW tem TRÊS detectores
+            [DB, DM1, DM2]. O terceiro (DM2) ficava com o padrão da
+            biblioteca (efficiency=0.9, dark_count=0), o que (a) tornava a
+            curva de eficiência do COW incomparável com as demais e
+            (b) desbalanceava a linha de monitoramento (DM1 com o valor
+            varrido, DM2 com 0.9), enviesando a visibilidade que alimenta
+            R_sk^COW.
+            """
+            spec["detector_params_by_key"] = {
+                dk: [{**d, key: value} for d in dl]
+                for dk, dl in det_lookup.items()
+            }
 
         if sweep_var == "distance":
             spec["distance"] = val
@@ -998,31 +1087,45 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
         elif sweep_var == "mean_photon_num":
             ls_overrides["mean_photon_num"] = val
         elif sweep_var == "efficiency":
-            det_override = []
-            for d in detector_params:
-                x = dict(d)
-                x["efficiency"] = val
-                det_override.append(x)
-            spec["detector_params"] = det_override
+            _override_detectors("efficiency", val)
         elif sweep_var == "dark_count":
-            det_override = []
-            for d in detector_params:
-                x = dict(d)
-                x["dark_count"] = val
-                det_override.append(x)
-            spec["detector_params"] = det_override
+            _override_detectors("dark_count", val)
         elif sweep_var == "atm_visibility":
             lp["atm_visibility"] = val
         elif sweep_var == "C_n2":
             lp["C_n2"] = val
-        elif sweep_var == "temperature":
-            lp["temperature"] = val
-        elif sweep_var == "pressure":
-            lp["pressure"] = val
+        elif sweep_var in ("temperature", "pressure", "height_ag",
+                           "ground_wind_speed"):
+            # CORREÇÃO: T, P, altura e vento não são parâmetros
+            # independentes de channel_FSO_loss -- eles determinam u*
+            # (f_velocity), a viscosidade e sobretudo C_n2
+            # (cn2_horizontal_link). Antes só a própria chave era
+            # sobrescrita, e C_n2/friction_velocity permaneciam nos valores
+            # base; por isso metrics_variable-{temperature,pressure,
+            # height_ag}.csv trazem Loss CONSTANTE em 0.160100 (6 casas) e
+            # as curvas publicadas são apenas ruído de Monte Carlo.
+            if sweep_var == "ground_wind_speed":
+                lp["wind_speed_perp"] = wind_speed_perp(
+                    site_altitude_for_sweeps, val)
+                ground_wind = val
+            else:
+                lp[sweep_var] = val
+                ground_wind = base_ground_wind
+            lp["friction_velocity"] = f_velocity(
+                ground_wind, T_classification=7,
+                height_ag=lp["height_ag"])
+            lp["C_n2"] = cn2_horizontal_link(
+                lp["height_ag"], hour=cn2_reference_hour,
+                sunrise=cn2_sunrise, sunset=cn2_sunset,
+                temperature=lp["temperature"], wind_speed=ground_wind,
+                relative_humidity=cn2_relative_humidity)
         elif sweep_var == "wind_speed_perp":
+            # NOTA: `wind_speed_perp` NÃO é argumento de channel_FSO_loss
+            # (_compute_loss o remove); ele só age no processo de fase
+            # atmosférica do COW. Varrê-lo isoladamente produz colunas
+            # planas para 9 dos 10 protocolos -- prefira o sweep
+            # "ground_wind_speed", que propaga o vento para u* e C_n2.
             lp["wind_speed_perp"] = val
-        elif sweep_var == "height_ag":
-            lp["height_ag"] = val
         elif sweep_var == "receiver_radius":
             lp["receiver_radius"] = val
             tp["receiver_radius"] = val
@@ -1207,13 +1310,21 @@ def default_environment():
     extra_kwargs = None
 
     # -- Common kwargs reused by every variable-sweep
+    # CORREÇÃO: `key_num=1` gerava UMA única chave por ponto, isto é, uma
+    # única realização de Monte Carlo, sem média nem barra de erro. Com um
+    # desvio típico de ~5% em R_sk isso torna indistinguíveis de ruído
+    # todas as varreduras de efeito pequeno (C_n2, T, P, height_ag,
+    # wind, charlie_position, dark_count). `_collect_metrics` já promedia
+    # sobre as chaves geradas, então basta pedir mais de uma; com
+    # keysize=1e4 e latência ~9 ms, 10 chaves cabem folgadamente no
+    # orçamento de runtime=1000 ms.
     common = dict(
         runtime=1000,
         channel_parameters=channel_parameters,
         ls_params=ls_params, ls_params_cow=ls_params_cow,
         detector_params=detector_params,
         detector_params_cow=detector_params_cow,
-        key_num=1,
+        key_num=10,
         loss_parameters=loss_parameters,
         thermal_params=thermal_params,
         extra_kwargs=extra_kwargs,
@@ -1222,7 +1333,11 @@ def default_environment():
     site = dict(temperature=temperature, pressure=pressure,
                 wind_speed=wind_speed, height_link=height_link,
                 site_altitude=site_altitude, latitude=latitude,
-                longitude=longitude, sunrise=sunrise, sunset=sunset)
+                longitude=longitude, sunrise=sunrise, sunset=sunset,
+                relative_humidity=47.0, cn2_reference_hour=12.0)
+    # `site` também é consumido por sim_variable para RECALCULAR u* e C_n2
+    # quando T / P / altura / vento são varridos (ver point_to_spec).
+    common["site"] = site
 
     return dict(ls_params=ls_params, ls_params_cow=ls_params_cow,
                 detector_params=detector_params,
@@ -1251,6 +1366,13 @@ def run_simulation():
     env = default_environment()
     common = env["common"]
     common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "f_ec": 1.0}
+    # charlie_position explícito: o default da assinatura vale para TODAS as
+    # varreduras, e 0.1 (fonte a 10% do enlace) não é a configuração
+    # simétrica que o README usa como referência para comparar as famílias. No entanto,
+    # tal configuração de charlie_position é análoga ao utilizado em Kržič.
+    common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "f_ec": 1.0,
+                              "charlie_position": 0.1,
+                              "classical_delay_offset_ps": 1e9}
     site_altitude = env["site"]["site_altitude"]
 
     # `distance` is the total Alice--Bob separation for EVERY protocol; for
@@ -1280,16 +1402,21 @@ def run_simulation():
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
                  
     sim_variable("efficiency", [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0], keysize=10000, **common)
-    sim_variable("dark_count", [10,30,100,300,1000,3000,10000], keysize=10000, **common)
+    # Faixa corrigida: com B_sky de meio-dia, n_B = 8,6e-2 fótons/gate,
+    # enquanto dark_count*gate vale 1e-7 (100 Hz) a 1e-5 (10 kHz) -- três a
+    # seis ordens de grandeza abaixo do fundo. A faixa original 10..1e4 Hz
+    # é fisicamente incapaz de produzir qualquer efeito observável.
+    sim_variable("dark_count", [1e2,1e3,1e4,1e5,1e6,1e7,1e8], keysize=10000, **common)
     sim_variable("frequency", [1e6,2e6,5e6,8e6,10e6,20e6,50e6], keysize=10000, **common)
     sim_variable("atm_visibility", [100,200,500,1000,2000,5000,10000,20000,50000], keysize=10000, **common)
     sim_variable("C_n2", [1e-18,1e-17,3e-17,1e-16,3e-16,1e-15], keysize=10000, **common)
     sim_variable("temperature", [273,282,293,303,308,313], keysize=10000, **common)
     sim_variable("pressure", [80000,85000,90000,92700, 95000,100000], keysize=10000, **common)
 
-    wind_values = [wind_speed_perp(site_altitude,v) for v in [0.1,2,5,10,15,20]]
-
-    sim_variable("wind_speed_perp", wind_values, keysize=10000, **common)
+    # Vento de superfície: propagado para u* E para C_n2 (ver point_to_spec).
+    # A varredura antiga ("wind_speed_perp") era inerte para 9 dos 10
+    # protocolos porque channel_FSO_loss não recebe wind_speed_perp.
+    sim_variable("ground_wind_speed", [0.1,2,5,10,15,20], keysize=10000, **common)
     sim_variable("height_ag", [2,5,8,10,20,50], keysize=10000, **common)
     sim_variable("receiver_radius", [0.025,0.05,0.075,0.10,0.15], keysize=10000, **common)
     sim_variable("filter_bandwidth", [0.1e-9,0.2e-9,0.5e-9,1e-9,2e-9,5e-9,10e-9], keysize=10000, **common)

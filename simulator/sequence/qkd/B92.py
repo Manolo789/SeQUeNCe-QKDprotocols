@@ -296,7 +296,9 @@ class B92(StackProtocol):
 
             # generate bit list
             num_pulses = round(self.light_time * self.ls_freq)
-            bit_list = numpy.random.choice([0, 1], num_pulses)
+            # CORREÇÃO: ver BB84.begin_photon_pulse -- o gerador global do
+            # NumPy não é semeado por Node.set_seed().
+            bit_list = self.owner.get_generator().choice([0, 1], num_pulses)
 
             # control hardware
             lightsource = self.owner.components[self.ls_name]
@@ -339,7 +341,7 @@ class B92(StackProtocol):
         log.logger.debug(self.name + " setting measurement basis")
 
         num_pulses = int(self.light_time * self.ls_freq)
-        basis_list = numpy.random.choice([0, 1], num_pulses)
+        basis_list = self.owner.get_generator().choice([0, 1], num_pulses)
         self.basis_lists.append(basis_list)
         self.owner.components[self.qsd_name].set_basis_list(basis_list, self.start_time, self.ls_freq)
 

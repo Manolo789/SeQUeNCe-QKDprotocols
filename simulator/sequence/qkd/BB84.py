@@ -251,8 +251,15 @@ class BB84(StackProtocol):
 
             # generate basis/bit list
             num_pulses = round(self.light_time * self.ls_freq)
-            basis_list = numpy.random.choice([0, 1], num_pulses)
-            bit_list = numpy.random.choice([0, 1], num_pulses)
+            # CORREÇÃO (reprodutibilidade): `numpy.random.choice` usa o
+            # gerador GLOBAL legado do NumPy, que NÃO é semeado por
+            # Node.set_seed(). As bases e os bits de Alice/Bob eram, por
+            # isso, sorteados a partir da entropia do SO -- a simulação
+            # inteira ficava irreprodutível e cada ponto das varreduras
+            # (com key_num=1) virava uma realização única e não repetível.
+            rng = self.owner.get_generator()
+            basis_list = rng.choice([0, 1], num_pulses)
+            bit_list = rng.choice([0, 1], num_pulses)
 
             # control hardware
             lightsource = self.owner.components[self.ls_name]
@@ -295,7 +302,7 @@ class BB84(StackProtocol):
         log.logger.debug(self.name + " setting measurement basis")
 
         num_pulses = int(self.light_time * self.ls_freq)
-        basis_list = numpy.random.choice([0, 1], num_pulses)
+        basis_list = self.owner.get_generator().choice([0, 1], num_pulses)
         self.basis_lists.append(basis_list)
         self.owner.components[self.qsd_name].set_basis_list(basis_list, self.start_time, self.ls_freq)
 
