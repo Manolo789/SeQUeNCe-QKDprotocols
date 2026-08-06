@@ -27,10 +27,13 @@ reproducible while different tasks stay statistically independent. The
 global seed is written to ``data/simulator_metrics.csv`` together with the
 campaign metadata needed to replicate it.
 
-Because ``key_num`` keys are generated per point and every key is an
-independent Monte Carlo realisation, each sampled metric is exported as a
-mean plus its sample standard deviation and standard error of the mean
-(the ``*_std`` / ``*_sem`` CSV columns used as error bars by ``plot.py``).
+Every sweep point is simulated ``n_replicas`` times (independent seeds,
+hence independent atmospheric realisations), and each replica generates
+``key_num`` keys. Sampled metrics are exported as a mean plus a standard
+deviation and a standard error (the ``*_std`` / ``*_sem`` CSV columns used
+as error bars by ``plot.py``). The dispersion is computed ACROSS replicas
+rather than across pooled keys, because keys of one run are clustered by
+the atmospheric realisation they share -- see :func:`replicate_statistics`.
 """
 
 import math
@@ -218,17 +221,29 @@ _SAMPLED_METRIC_KEYS = {"skr", "qber", "throughputs", "rs",
 #: Number of keys that actually entered the statistics of a point.
 _NKEYS_COL = ("N_keys", "n_keys")
 
+#: Number of independent replicas that contributed to a point.
+_NREPLICAS_COL = ("N_replicas", "n_replicas")
+
 #: Output directory of the realistic free-space (aerial link) campaign.
 DEFAULT_DATA_DIR = "data"
 #: Output directory of the attenuation-only reference campaign, kept apart
 #: so that both link models can be plotted and compared side by side.
 REFERENCE_LINK_DATA_DIR = os.path.join("data", "reference_link")
 
-#: Keys generated per sweep point. Each key is an independent Monte Carlo
-#: realisation, so this is the sample size behind every error bar: raising
-#: it shrinks the standard error as 1/sqrt(key_num) at a proportional cost
-#: in simulated time. Values below 2 leave the dispersion undefined (NaN).
+#: Keys generated per replica. Consecutive keys advance the RNG stream, so
+#: they ARE distinct realisations of the detection/eavesdropping noise --
+#: but they share the run's atmospheric phase realisation, which is
+#: pre-generated once per simulation. They therefore measure the
+#: WITHIN-realisation (temporal) variation only.
 KEY_NUM_FOR_STATISTICS = 5
+
+#: Independent replicas of every sweep point. A replica is a full
+#: re-simulation under a different derived seed, so it re-draws EVERYTHING,
+#: including the atmospheric piston and Eve's attack pattern. This is what
+#: turns the error bar into an ensemble quantity (see
+#: :func:`replicate_statistics`); values below 2 fall back to the
+#: within-run error bar. Cost per point scales as key_num * n_replicas.
+N_REPLICAS_FOR_STATISTICS = 5
 
 #: Sweeps that only make sense with an atmospheric model configured.
 _ATMOSPHERIC_SWEEPS = frozenset({
@@ -245,7 +260,8 @@ _STAT_SUFFIXES = ("", "_std", "_sem")
 # of the CSV (historical case: sweep "visibility" [atmospheric] vs. metric
 # "visibility" [COW interferometer]).
 _RESERVED_RESULT_KEYS = (
-    {"protocol", "global_seed", _NKEYS_COL[1]}
+    {"protocol", "global_seed", "replica", "samples",
+     _NKEYS_COL[1], _NREPLICAS_COL[1]}
     | {k for _, k in _METRIC_COLS}
     | {_VIS_COL[1], _CHSH_COL[1]}
     | {f"{k}{s}" for k in _SAMPLED_METRIC_KEYS for s in _STAT_SUFFIXES})
@@ -296,12 +312,13 @@ def _safe_mean(lst, default=np.nan):
 
 
 def sample_statistics(samples):
-    """Mean, sample standard deviation and standard error of a metric.
+    """Mean, sample standard deviation and standard error of a flat sample.
 
-    Each generated key is one independent Monte Carlo realisation of the
-    point, so the spread over the ``key_num`` keys is the natural error
-    bar of the campaign. The unbiased (ddof=1) estimator is used, hence
-    the dispersion is undefined for a single key.
+    The unbiased (ddof=1) estimator is used, so the dispersion is
+    undefined for a single value. This is the WITHIN-run estimator: it
+    treats every entry as an independent draw and is applied to the keys
+    of one simulation, which share that run's atmospheric realisation. Use
+    :func:`replicate_statistics` for the ensemble error bar.
 
     Args:
         samples: sequence of per-key values (may contain NaN) or None.
@@ -323,6 +340,57 @@ def sample_statistics(samples):
         return mean, np.nan, np.nan, n
     std = float(values.std(ddof=1))
     return mean, std, std / math.sqrt(n), n
+
+def replicate_statistics(per_replica_samples):
+    """Ensemble statistics of a metric measured over independent replicas.
+
+    Keys generated inside ONE simulation share the run's non-resampled
+    state -- most importantly the atmospheric phase realisation, which is
+    pre-generated once per run. They are therefore CLUSTERED samples:
+    pooling them and dividing by sqrt(N) would understate the uncertainty,
+    because consecutive keys explore time windows of a single turbulence
+    realisation rather than the turbulence ensemble.
+
+    With two or more replicas the estimator is computed at the replica
+    level (the standard cluster-robust choice): each replica contributes
+    its own mean, and the dispersion is taken ACROSS those means, so the
+    error bar covers both the within-run noise and the run-to-run spread
+    of the atmospheric/eavesdropping realisation. With a single replica it
+    falls back to pooling the keys, which measures only the within-run
+    (temporal) variation -- see :func:`sample_statistics`.
+
+    Args:
+        per_replica_samples: sequence of per-key sample lists, one list per
+            replica (a replica being one full simulation with its own seed).
+
+    Returns:
+        tuple: (mean, std, sem, n_keys, n_replicas) where ``n_keys`` counts
+        every finite key sample pooled over replicas and ``n_replicas``
+        counts the replicas that produced at least one key.
+    """
+    groups = []
+    for samples in (per_replica_samples or []):
+        if samples is None:
+            continue
+        values = np.asarray(samples, dtype=float).ravel()
+        values = values[np.isfinite(values)]
+        if values.size:
+            groups.append(values)
+
+    n_keys = int(sum(g.size for g in groups))
+    n_replicas = len(groups)
+    if n_replicas == 0:
+        return np.nan, np.nan, np.nan, 0, 0
+    if n_replicas == 1:
+        mean, std, sem, _ = sample_statistics(groups[0])
+        return mean, std, sem, n_keys, 1
+
+    # Replicas are weighted equally: each one is a draw of the ensemble,
+    # regardless of how many keys it managed to produce.
+    means = np.array([g.mean() for g in groups], dtype=float)
+    mean = float(means.mean())
+    std = float(means.std(ddof=1))
+    return mean, std, std / math.sqrt(n_replicas), n_keys, n_replicas
 
 
 def _empty_metrics(protocol):
@@ -1183,7 +1251,7 @@ def _build_task_kwargs(*, distance, keysize, ls_params, detector_params,
 def _build_tasks(points, point_to_spec, *, runtime, channel_parameters,
                  ls_lookup, det_lookup, base_loss_p, base_thermal_p,
                  base_keysize, key_num, protocols, global_seed,
-                 extra_kwargs=None):
+                 n_replicas=1, extra_kwargs=None):
     """Build the (point x protocol) task list from a generic point->spec.
 
     ``point_to_spec(point)`` must return a dict with:
@@ -1194,12 +1262,16 @@ def _build_tasks(points, point_to_spec, *, runtime, channel_parameters,
         'ls_overrides'               (optional -- overlay on protocol ls_params)
         'kwarg_override'             (optional -- overlay on final kwargs)
 
-    Each task also receives its own run seed, derived from ``global_seed``
-    and from the task identity (protocol, sweep variable, sweep value).
-    Two consequences matter scientifically: re-running the campaign with
-    the same global seed reproduces every point exactly, and neighbouring
-    points/protocols use independent streams instead of replaying the same
-    noise realisation.
+    Each point x protocol is expanded into ``n_replicas`` tasks, and each
+    task receives its own run seed derived from ``global_seed`` and from
+    the task identity (protocol, sweep variable, sweep value, replica
+    index). Three consequences matter scientifically: re-running the
+    campaign with the same global seed reproduces every point exactly;
+    neighbouring points/protocols use independent streams instead of
+    replaying the same noise realisation; and the replicas of one point
+    re-draw the whole run, atmospheric realisation included, which is what
+    :func:`replicate_statistics` needs to build an ensemble error bar.
+
 
     Args:
         points: iterable of sweep points handed to ``point_to_spec``.
@@ -1212,13 +1284,14 @@ def _build_tasks(points, point_to_spec, *, runtime, channel_parameters,
         base_loss_p (dict | None): default FSO parameters.
         base_thermal_p (dict | None): default sky-background parameters.
         base_keysize (int): key size used when the spec does not override it.
-        key_num (int): keys per point (Monte Carlo samples).
+        key_num (int): keys generated per replica.
         protocols (list[str]): registry keys to simulate at every point.
         global_seed (int): campaign seed, see :func:`resolve_global_seed`.
+        n_replicas (int): independent re-simulations of every point.
         extra_kwargs (dict | None): overlay applied to every task.
 
     Returns:
-        list[dict]: one task dict per (point, protocol) pair.
+        list[dict]: one task dict per (point, protocol, replica) triple.
     """
     fixed_dist, att, pfid_initial = channel_parameters
     tasks = []
@@ -1253,92 +1326,121 @@ def _build_tasks(points, point_to_spec, *, runtime, channel_parameters,
                 source_type=cfg["source_type"],
                 extra_kwargs={**(extra_kwargs or {}), **kwarg_o},
             )
+            
+            
             # The task identity fixes the seed, so the point is reproducible
             # regardless of the order in which the pool happens to run it.
-            kwargs["seed"] = derive_seed(global_seed, proto, sweep_var,
-                                         sweep_val)
-            tasks.append({"protocol": proto, "sweep_var": sweep_var,
-                          "sweep_val": sweep_val, "kwargs": kwargs})
+            for replica in range(max(1, int(n_replicas))):
+                rep_kwargs = dict(kwargs)
+                rep_kwargs["seed"] = derive_seed(global_seed, proto, sweep_var,
+                                                 sweep_val, replica)
+                tasks.append({"protocol": proto, "sweep_var": sweep_var,
+                              "sweep_val": sweep_val, "replica": replica,
+                              "kwargs": rep_kwargs})
+
     return tasks
 
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Worker + result wiring (used by every sweep type)
 # ═══════════════════════════════════════════════════════════════════════
-def _add_sample_stats(out, key, samples):
-    """Store mean/std/sem of one sampled metric in a worker result dict.
+def _sampled_keys_of(proto):
+    """Metric keys carrying per-key samples for a given protocol.
 
     Args:
-        out (dict): worker result being assembled (modified in place).
-        key (str): metric key, e.g. ``"skr"``.
-        samples: per-key values of the metric for this point.
+        proto (str): registry key of the protocol.
 
     Returns:
-        int: number of finite samples that entered the statistics.
+        list[str]: result-dict keys reduced by :func:`replicate_statistics`.
     """
-    mean, std, sem, n = sample_statistics(samples)
-    out[key] = mean
-    out[f"{key}_std"] = std
-    out[f"{key}_sem"] = sem
-    return n
+    keys = ["skr", "qber", "throughputs", "rs"]
+    if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
+        keys.append(_VIS_COL[1])
+    if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
+        keys.append(_CHSH_COL[1])
+    return keys
 
 
 def _worker(task):
-    """Run one simulation in a worker process and summarise it statistically.
+    """Run ONE replica of a sweep point and return its raw per-key samples.
 
-    Every generated key is one Monte Carlo realisation, so the sampled
-    metrics are reduced here to (mean, standard deviation, standard error)
-    and the number of contributing keys is reported as ``n_keys``. Loss is
-    deterministic and latency is measured once per run, so both stay plain
-    scalars.
+    Reduction to (mean, std, sem) deliberately does NOT happen here: the
+    samples of a single replica are clustered by the run's shared
+    atmospheric realisation, so they are pooled across replicas by
+    :func:`_aggregate_point` before any dispersion is computed.
+
 
     Args:
         task (dict): entry produced by :func:`_build_tasks`.
 
     Returns:
-        dict: flat record consumed by :func:`_collect_results`.
+        dict: record with the replica index, the scalar metrics and a
+        ``samples`` sub-dict of per-key lists.
     """
     proto = task["protocol"]
     sweep_var = task["sweep_var"]
     sweep_val = task["sweep_val"]
     res = run_qkd_simulation(proto, **task["kwargs"])
 
-    out = {"protocol": proto, sweep_var: sweep_val,
-           "latency": res["latency"], "loss": res["loss"]}
-    n_keys = _add_sample_stats(out, "skr", res.get("skr_samples"))
-    _add_sample_stats(out, "qber", res.get("qber"))
-    _add_sample_stats(out, "rs", res.get("rs_samples"))
-    _add_sample_stats(out, "throughputs", res.get("throughput_samples"))
+    samples = {"skr": res.get("skr_samples"), "qber": res.get("qber"),
+               "rs": res.get("rs_samples"),
+               "throughputs": res.get("throughput_samples")}
+
     if "visibility" in res:
-        _add_sample_stats(out, "visibility", res["visibility"])
+        samples[_VIS_COL[1]] = res["visibility"]
     if "chsh_S" in res:
-        _add_sample_stats(out, "chsh_S", res["chsh_S"])
-    out["n_keys"] = n_keys
-    return out
+        samples[_CHSH_COL[1]] = res["chsh_S"]
+    return {"protocol": proto, sweep_var: sweep_val,
+            "replica": task.get("replica", 0),
+            "latency": res["latency"], "loss": res["loss"],
+            "samples": samples}
 
 
-def _fallback_result(proto, sweep_var, sweep_val):
-    """NaN-filled result for a failed task; preserves CSV column shape.
+def _fallback_result(proto, sweep_var, sweep_val, replica=0):
+    """Empty result for a failed replica; keeps the record shape intact.
 
     Args:
         proto (str): protocol whose task failed.
         sweep_var (str): name of the swept variable.
         sweep_val: value of the swept variable at the failed point.
+        replica (int): index of the failed replica.
 
     Returns:
-        dict: record with the same keys a successful run would produce.
+        dict: record with no samples, so the replica simply does not
+        contribute to the statistics of its point.
     """
-    fb = {"protocol": proto, sweep_var: sweep_val,
-          "latency": np.nan, "loss": np.nan, "n_keys": 0}
-    keys = ["skr", "qber", "throughputs", "rs"]
-    if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
-        keys.append(_VIS_COL[1])
-    if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
-        keys.append(_CHSH_COL[1])
-    for key in keys:
-        for suffix in _STAT_SUFFIXES:
-            fb[f"{key}{suffix}"] = np.nan
-    return fb
+    return {"protocol": proto, sweep_var: sweep_val, "replica": replica,
+            "latency": np.nan, "loss": np.nan,
+            "samples": {key: [] for key in _sampled_keys_of(proto)}}
+
+
+def _aggregate_point(proto, records):
+    """Reduce every replica of one sweep point to the published metrics.
+
+    Args:
+        proto (str): protocol of the point.
+        records (list[dict]): worker outputs for this (protocol, value).
+
+    Returns:
+        dict: flat metric record, with ``<key>``/``<key>_std``/``<key>_sem``
+        per sampled metric plus ``n_keys`` and ``n_replicas``.
+    """
+    out = {"latency": _safe_mean([r["latency"] for r in records]),
+           "loss": _safe_mean([r["loss"] for r in records])}
+    n_keys = n_replicas = 0
+    for key in _sampled_keys_of(proto):
+        per_replica = [r["samples"].get(key) for r in records]
+        mean, std, sem, keys_used, reps = replicate_statistics(per_replica)
+        out[key] = mean
+        out[f"{key}_std"] = std
+        out[f"{key}_sem"] = sem
+        # Every metric is measured on the same runs, so the largest count
+        # is the one describing the point (a metric can be all-NaN).
+        n_keys = max(n_keys, keys_used)
+        n_replicas = max(n_replicas, reps)
+    out["n_keys"] = n_keys
+    out["n_replicas"] = n_replicas
+    return out
 
 
 def _protocol_columns(proto):
@@ -1367,6 +1469,7 @@ def _protocol_columns(proto):
         else:
             cols.append((label, key))
     cols.append(_NKEYS_COL)
+    cols.append(_NREPLICAS_COL)
     return cols
 
 
@@ -1385,10 +1488,14 @@ def _collect_results(sweep_var, sweep_values, results_list, protocols,
     Returns:
         dict: column name -> np.ndarray, ready for ``pd.DataFrame``.
     """
-    data = {p: {} for p in protocols}
+    # Group the replicas of each (protocol, sweep value) before reducing.
+    grouped = {p: {} for p in protocols}
+
     for r in results_list:
-        if r["protocol"] in data:
-            data[r["protocol"]][r[sweep_var]] = r
+        if r["protocol"] in grouped:
+            grouped[r["protocol"]].setdefault(r[sweep_var], []).append(r)
+    data = {p: {v: _aggregate_point(p, recs) for v, recs in points.items()}
+            for p, points in grouped.items()}
 
     metrics = {sweep_var: np.array(sweep_values)}
     if global_seed is not None:
@@ -1428,8 +1535,10 @@ def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers,
         max_workers = os.cpu_count() or 4
 
     total = len(tasks)
+    n_replicas = max(1, total // max(1, len(sweep_values) * len(protocols)))
     print(f"[parallel] Launching {total} tasks across {max_workers} workers "
-          f"({len(sweep_values)} {label}s x {len(protocols)} protocols)")
+          f"({len(sweep_values)} {label}s x {len(protocols)} protocols "
+          f"x {n_replicas} replicas)")
 
     results = []
     t_start = time.time()
@@ -1454,9 +1563,10 @@ def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers,
                     results.append(future.result())
                 except Exception as exc:
                     proto, val = t["protocol"], t["sweep_val"]
+                    rep = t.get("replica", 0)
                     print(f"\n[parallel] WARNING: {proto} @ {label}={val} "
-                          f"failed: {exc}")
-                    results.append(_fallback_result(proto, label, val))
+                          f"(replica {rep}) failed: {exc}")
+                    results.append(_fallback_result(proto, label, val, rep))
                 print(f"\r[parallel] {i}/{total} done ({i/total*100:.1f}%), "
                       f"elapsed {time.time() - t_start:.0f}s",
                       end="", flush=True)
@@ -1480,7 +1590,8 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
                  key_num, loss_parameters, thermal_params,
                  keysize=10000, protocols=None, output_csv=None,
                  max_workers=None, extra_kwargs=None,
-                 site=None, global_seed=None, output_dir=DEFAULT_DATA_DIR):
+                 site=None, global_seed=None, output_dir=DEFAULT_DATA_DIR,
+                 n_replicas=1):
     """Parallel sweep over a single kwarg of run_qkd_simulation.
 
     Args:
@@ -1493,9 +1604,9 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
             polarization_fidelity) of the fixed operating point.
         ls_params / ls_params_cow: light-source parameters per family.
         detector_params / detector_params_cow: detector parameter lists.
-        key_num: keys generated per point. Since each key is an independent
-            Monte Carlo realisation, this is the sample size behind the
-            ``*_std`` / ``*_sem`` columns -- use key_num >= 2 for error bars.
+        key_num: keys generated per replica. Consecutive keys advance the
+            RNG stream, so they differ, but they share the run's atmospheric
+            realisation; they measure the WITHIN-run variation.
         loss_parameters: FSO/atmospheric parameters, or None to simulate the
             attenuation-only reference link.
         thermal_params: sky-background parameters, or None for no background.
@@ -1512,6 +1623,12 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
         output_dir: directory of the default ``output_csv``; the realistic
             and reference-link campaigns use different ones so both sets of
             CSVs can coexist.
+        n_replicas: independent re-simulations of every point, each with its
+            own derived seed. Unlike extra keys, a replica re-draws the
+            atmospheric piston and Eve's pattern too, so n_replicas >= 2
+            promotes the error bar from within-run to ensemble level (see
+            :func:`replicate_statistics`). Cost scales as key_num*n_replicas.
+
 
     Returns:
         dict of column_name -> np.ndarray (also saved as CSV).
@@ -1681,7 +1798,7 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
         base_loss_p=loss_parameters, base_thermal_p=thermal_params,
         base_keysize=keysize, key_num=key_num,
         protocols=protocols, global_seed=global_seed,
-        extra_kwargs=extra_kwargs,
+        n_replicas=n_replicas, extra_kwargs=extra_kwargs,
     )
     return _run_tasks(tasks, sweep_var, sweep_values, protocols,
                       output_csv, max_workers, global_seed=global_seed)
@@ -1692,7 +1809,7 @@ def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
                  keysize, key_num, base_loss_parameters, base_thermal_params,
                  diurnal_profile_fn, protocols=None, output_csv=None,
                  max_workers=None, extra_kwargs=None, global_seed=None,
-                 output_dir=DEFAULT_DATA_DIR):
+                 output_dir=DEFAULT_DATA_DIR, n_replicas=1):
     """Parallel sweep where each point materialises a full parameter set.
 
     Args:
@@ -1706,6 +1823,8 @@ def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
             unchanged by the scenario.
         global_seed: campaign seed; each task derives its own substream.
         output_dir: directory of the default ``output_csv``.
+        n_replicas: independent re-simulations of every point, as in
+            :func:`sim_variable`.
         ... (other args as in sim_variable)
 
     Returns:
@@ -1748,7 +1867,7 @@ def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
         base_loss_p=base_loss_parameters, base_thermal_p=base_thermal_params,
         base_keysize=keysize, key_num=key_num,
         protocols=protocols, global_seed=global_seed,
-        extra_kwargs=extra_kwargs,
+        n_replicas=n_replicas, extra_kwargs=extra_kwargs,
     )
     return _run_tasks(tasks, label, scenario_points, protocols,
                       output_csv, max_workers, global_seed=global_seed)
@@ -1849,13 +1968,13 @@ def default_environment():
     extra_kwargs = None
 
     # -- Common kwargs reused by every variable-sweep.
-    # key_num is the Monte Carlo sample size of every point: each key is an
-    # independent realisation, so key_num=1 (the historical value) yields a
-    # single draw with no mean and no error bar, which hides every
-    # small-effect sweep (C_n2, T, P, height_ag, wind, charlie_position,
-    # dark_count) under a ~5% spread in R_sk. With keysize=1e4 and a latency
-    # of ~9 ms per key, KEY_NUM_FOR_STATISTICS keys fit comfortably in the
-    # runtime=1000 ms budget.
+    # The Monte Carlo sample size of a point is key_num * n_replicas. The
+    # historical key_num=1 with a single run gave one draw, no mean and no
+    # error bar, hiding every small-effect sweep (C_n2, T, P, height_ag,
+    # wind, charlie_position, dark_count) under a ~5% spread in R_sk. The
+    # replicas are what make the error bar an ENSEMBLE quantity, since they
+    # re-draw the atmospheric realisation that the keys of one run share.
+
     common = dict(
         runtime=1000,
         channel_parameters=channel_parameters,
@@ -1863,6 +1982,7 @@ def default_environment():
         detector_params=detector_params,
         detector_params_cow=detector_params_cow,
         key_num=KEY_NUM_FOR_STATISTICS,
+        n_replicas=N_REPLICAS_FOR_STATISTICS,
         loss_parameters=loss_parameters,
         thermal_params=thermal_params,
         extra_kwargs=extra_kwargs,
@@ -1924,6 +2044,7 @@ def reference_link_environment():
         detector_params=env["detector_params"],
         detector_params_cow=env["detector_params_cow"],
         key_num=KEY_NUM_FOR_STATISTICS,
+        n_replicas=N_REPLICAS_FOR_STATISTICS,
         loss_parameters=None,
         thermal_params=None,
         extra_kwargs=None,
@@ -1948,7 +2069,7 @@ def build_diurnal_profile_fn(env):
 
 
 def save_simulator_metrics(path, elapsed_s, global_seed, key_num,
-                           campaigns, extra=None):
+                           campaigns, n_replicas=1, extra=None):
     """Record the campaign metadata needed to replicate the run.
 
     Storing the global seed is what makes the results reproducible in a
@@ -1961,8 +2082,10 @@ def save_simulator_metrics(path, elapsed_s, global_seed, key_num,
         path (str): destination CSV.
         elapsed_s (float): wall-clock duration of the campaign [s].
         global_seed (int): seed that generated the whole campaign.
-        key_num (int): keys per point, i.e. the Monte Carlo sample size.
+        key_num (int): keys generated per replica.
         campaigns (str): which link models were simulated.
+        n_replicas (int): independent re-simulations per point; the total
+            Monte Carlo sample size of a point is key_num * n_replicas.
         extra (dict | None): additional single-value columns.
 
     Returns:
@@ -1973,6 +2096,7 @@ def save_simulator_metrics(path, elapsed_s, global_seed, key_num,
         "global_seed": [global_seed],
         "seed_env_var": [GLOBAL_SEED_ENV_VAR],
         "key_num": [key_num],
+        "n_replicas": [n_replicas],
         "campaigns": [campaigns],
         "timestamp_utc": [datetime.now(timezone.utc).isoformat(timespec="seconds")],
     }
@@ -2122,6 +2246,7 @@ def run_simulation(global_seed=None, run_reference_link=True):
         detector_params=env["detector_params"],
         detector_params_cow=env["detector_params_cow"],
         keysize=10_000, key_num=KEY_NUM_FOR_STATISTICS,
+        n_replicas=N_REPLICAS_FOR_STATISTICS,
         base_loss_parameters=env["loss_parameters"],
         base_thermal_params=env["thermal_params"],
         diurnal_profile_fn=diurnp_fn,
@@ -2139,6 +2264,7 @@ def run_simulation(global_seed=None, run_reference_link=True):
         elapsed_s=time.time() - start,
         global_seed=global_seed,
         key_num=KEY_NUM_FOR_STATISTICS,
+        n_replicas=N_REPLICAS_FOR_STATISTICS,
         campaigns=campaigns,
         extra={"reference_link_dir": REFERENCE_LINK_DATA_DIR},
     )

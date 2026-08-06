@@ -185,8 +185,12 @@ class QuantumChannel(OpticalChannel):
         rng = self.sender.get_generator()
 
         if qubit.encoding_type["name"] == "polarization":
+            # Both draws come from the SENDER's seeded generator. A
+            # QuantumChannel has no owner node, so `self.get_generator()`
+            # would fall back to an unseeded `default_rng()` and silently
+            # break reproducibility whenever polarization_fidelity < 1.
             if rng.random() > self.polarization_fidelity:
-                qubit.random_noise(self.get_generator())
+                qubit.random_noise(rng)
 
         elif qubit.encoding_type["name"] == "time_bin_cow":
             # Level-3 atmospheric piston: temporally correlated process.
