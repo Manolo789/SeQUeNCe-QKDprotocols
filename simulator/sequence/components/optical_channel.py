@@ -329,44 +329,53 @@ class QuantumChannel(OpticalChannel):
         return self.timeline.get_entity_by_name(self.receiver) is None
 
 class EveQuantumChannel(QuantumChannel):
-    """Canal quântico com intercepção transparente por Eve.
+    """Quantum channel with transparent interception by Eve.
 
-    Eve é inserida entre Alice e Bob **sem que nenhum deles saiba**.
-    O setup da simulação permanece idêntico ao caso sem Eve:
+    Eve is inserted between Alice and Bob **without either of them knowing**.
+    The simulation setup is identical to the eavesdropper-free case:
 
         qc0 = EveQuantumChannel("qc0", tl, eve_node=eve, distance=distance, ...)
-        qc0.set_ends(alice, bob.name)   # ← mesmo código que sem Eve
+        qc0.set_ends(alice, bob.name)   # same code as without Eve
 
-    Internamente, o canal divide-se em dois segmentos:
-        alice ──[seg1]──► eve ──[seg2]──► bob
+    Internally the channel is split into two segments:
+        alice --[seg1]--> eve --[seg2]--> bob
 
-    O canal `seg2` (Eve → Bob) é criado automaticamente no `init()`.
+    The `seg2` channel (Eve -> Bob) is created automatically in `set_ends`.
 
     Attributes:
-        eve_node (EveNode): nó espiã inserido no canal.
-        eve_position (float): posição fracionária de Eve ao longo do
-            canal (0 = junto de Alice, 1 = junto de Bob). Default 0.5.
-        _seg2 (QuantumChannel): segmento interno Eve → Bob, criado em
-            `init()` após `set_ends` definir o receptor final.
+        eve_node (EveNode): eavesdropper node inserted in the channel.
+        eve_position (float): fractional position of Eve along the channel
+            (0 = next to Alice, 1 = next to Bob). Defaults to 0.5.
+        _seg2 (QuantumChannel): internal Eve -> Bob segment, created in
+            `set_ends` once the final receiver is known.
     """
 
     def __init__(self, name: str, timeline: "Timeline", eve_node: "EveNode", attenuation: float, distance: float, 
         pf_seg1: float = 1.0, pf_seg2: float = 1.0, light_speed: float = SPEED_OF_LIGHT, frequency: float = 8e6, eve_position: float = 0.5, phase_noise_coefficient: float = 0.0, phase_noise_coefficient_seg2: "float | None" = None,
         loss_seg1: "float | None" = None, loss_seg2: "float | None" = None, atmospheric_phase_process: "Optional[AtmosphericPhaseProcess]" = None, atmospheric_phase_process_seg2: "Optional[AtmosphericPhaseProcess]" = None) -> None:
-        """
+        """Build the Alice -> Eve segment; segment 2 is built in set_ends.
+
         Args:
-            name:                 nome do canal.
-            timeline:             timeline da simulação.
-            eve_node:             nó EveNode a inserir no meio do canal.
-            attenuation:          atenuação da fibra em dB/m.
-            distance:             distância total Alice→Bob em metros.
-            polarization_fidelity: fidelidade de polarização (0–1).
-            light_speed:          velocidade da luz na fibra em m/ps.
-            frequency:            frequência máxima de transmissão em Hz.
-            eve_position:         posição fracionária de Eve (0–1).
+            name: channel name.
+            timeline: simulation timeline.
+            eve_node: EveNode to insert in the middle of the channel.
+            attenuation: channel attenuation in dB/m.
+            distance: total Alice -> Bob distance in metres.
+            pf_seg1: polarisation fidelity of segment 1 (0-1).
+            pf_seg2: polarisation fidelity of segment 2 (0-1).
+            light_speed: speed of light in the medium, in m/ps.
+            frequency: maximum transmission frequency in Hz.
+            eve_position: fractional position of Eve (0-1).
+            phase_noise_coefficient: phase noise of segment 1 [rad/sqrt(m)].
+            phase_noise_coefficient_seg2: same for segment 2; mirrors
+                segment 1 when None.
+            loss_seg1: explicit loss of segment 1; overrides attenuation.
+            loss_seg2: explicit loss of segment 2; overrides attenuation.
+            atmospheric_phase_process: piston phase process of segment 1.
+            atmospheric_phase_process_seg2: same for segment 2.
         """
         dist_seg1 = distance * eve_position
-        # O segmento 1 (Alice→Eve) é o próprio canal — herda QuantumChannel
+        # Segment 1 (Alice -> Eve) IS this channel, inherited from QuantumChannel.
         super().__init__(
             name, timeline,
             attenuation=attenuation,
@@ -382,33 +391,33 @@ class EveQuantumChannel(QuantumChannel):
         self.loss_seg2: "float | None" = loss_seg2
         self.pf_seg2: float = pf_seg2
         self._total_distance: float = distance
-        self._seg2: Optional[QuantumChannel] = None   # criado em init()
+        self._seg2: Optional[QuantumChannel] = None   # created in set_ends()
         self._atm_proc_seg2 = atmospheric_phase_process_seg2
         self._phase_noise_coef_seg2 = (phase_noise_coefficient if phase_noise_coefficient_seg2 is None else phase_noise_coefficient_seg2)
 
     # ── QuantumChannel interface ──────────────────────────────────────────
 
     def set_ends(self, sender: "Node", receiver: str) -> None:
-        """Registra Alice como emissora e intercepta o canal para Eve.
+        """Register Alice as the sender and divert the channel through Eve.
 
-        O canal é registrado em Alice sob o nome do receptor final (Bob),
-        de modo que `alice.send_qubit('bob', photon)` use este canal.
-        Eve permanece invisível para o protocolo.
+        The channel is registered on Alice under the name of the FINAL
+        receiver (Bob), so that `alice.send_qubit('bob', photon)` uses it
+        and Eve stays invisible to the protocol.
 
         Args:
-            sender:   nó de Alice.
-            receiver: nome do nó de Bob (receptor final).
+            sender: Alice's node.
+            receiver: name of Bob's node (the final receiver).
         """
-        # ── Segmento 1: Alice → Eve ───────────────────────────────────
-        # Registra este canal em Alice com a chave 'bob' (não 'eve').
-        # Assim alice.send_qubit('bob') usa este canal sem saber de Eve.
+        # -- Segment 1: Alice -> Eve --
+        # Registered on Alice under the key 'bob' (not 'eve'), so that
+        # alice.send_qubit('bob') uses this channel unknowingly.
         self.sender   = sender
         self.receiver = receiver
         sender.assign_qchannel(self, receiver)   # alice.qchannels['bob'] = self
 
-        # ── Segmento 2: Eve → Bob ─────────────────────────────────────
-        # Criado aqui (set_ends), não em init(), para não modificar
-        # timeline.entities durante a iteração de Timeline.init().
+        # -- Segment 2: Eve -> Bob --
+        # Built here rather than in init() so that timeline.entities is not
+        # modified while Timeline.init() iterates over it.
         dist_seg2 = self._total_distance * (1.0 - self.eve_position)
         seg2_name = f"{self.name}.seg2"
         self._seg2 = QuantumChannel(
@@ -422,38 +431,35 @@ class EveQuantumChannel(QuantumChannel):
             phase_noise_coefficient=self._phase_noise_coef_seg2,
             loss=self.loss_seg2, atmospheric_phase_process=self._atm_proc_seg2,
         )
-        # Registra _seg2 em Eve com a chave 'bob'.
-        # Eve chamará eve.send_qubit('bob') após intercepção.
+        # Register _seg2 on Eve under the key 'bob': Eve calls
+        # eve.send_qubit('bob') after interception.
         self._seg2.set_ends(self.eve_node, self.receiver)
 
-        # Define o destino de retransmissão de Eve
+        # Set Eve's forwarding destination.
         self.eve_node.destination = self.receiver
 
-    # ── init: nada a fazer — Timeline.init() cuida de _seg2 ──────────────
-
     def init(self) -> None:
-        """Inicializa ambos os segmentos e conecta Eve→Bob.
+        """Initialise segment 1; Timeline.init() initialises _seg2 itself.
 
-        Chamado por Timeline.init() após set_ends ter sido executado.
-        `self.receiver` já contém o nome do receptor final (Bob).
+        Called by Timeline.init() after set_ends has run, so
+        `self.receiver` already holds the name of the final receiver (Bob).
         """
-        # Inicializa o segmento 1 (Alice → Eve)
         super().init()
-        
-    # ── transmit: redireciona fótons para Eve ─────────────────────────────
 
     def transmit(self, qubit: "Photon", source: "Node") -> None:
-        """Transmite um fóton pelo segmento Alice→Eve.
+        """Transmit a photon over the Alice -> Eve segment.
 
-        Aplica perda e ruído de polarização do segmento 1, depois agenda
-        a entrega a Eve (não a Bob). Eve decidirá se intercepta ou
-        encaminha via `_seg2`.
+        Applies the loss and polarisation noise of segment 1, then
+        schedules delivery to EVE rather than to Bob; Eve then decides
+        whether to intercept or to forward through `_seg2`. Identical to
+        `QuantumChannel.transmit()` except for that scheduled receiver.
 
-        O método é idêntico ao `QuantumChannel.transmit()`, exceto que
-        o receptor agendado é `eve_node` em vez de `self.receiver`.
+        Args:
+            qubit: the photon being transmitted.
+            source: the sending node, which must be `self.sender`.
         """
         assert self.delay >= 0 and self.loss <= 1, \
-            f"EveQuantumChannel.init() não foi executado para {self.name}"
+            f"EveQuantumChannel.init() was not run for {self.name}"
         assert source == self.sender
 
         import heapq as hq
@@ -478,10 +484,15 @@ class EveQuantumChannel(QuantumChannel):
 
 
             self._schedule_to_eve(qubit, source)
-        # fóton perdido: não agenda nada
+        # Photon lost: nothing is scheduled.
 
     def _schedule_to_eve(self, qubit: "Photon", source: "Node") -> None:
-        """Agenda entrega do fóton a Eve após o atraso do segmento 1."""
+        """Schedule delivery of the photon to Eve after the segment-1 delay.
+
+        Args:
+            qubit: the photon to deliver.
+            source: the originating node, forwarded to Eve.
+        """
         future_time = self.timeline.now() + self.delay
         process = Process(self.eve_node.name, "receive_qubit",
                           [source.name, qubit])

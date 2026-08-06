@@ -35,41 +35,42 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ============================================================================
 
-Substitui o chaveamento binário dia/noite de scenarios.py
-(B_sky = 1,5e-6 ↔ 1,5e-2 W·m⁻²·nm⁻¹·sr⁻¹) por um modelo físico contínuo.
+Replaces the binary day/night switch of scenarios.py
+(B_sky = 1.5e-6 <-> 1.5e-2 W·m^-2·nm^-1·sr^-1) with a continuous physical
+model driven by the solar elevation.
 
-CADEIA DO MODELO (céu claro):
-  1. Posição solar (declinação, equação do tempo, ângulo horário) —
-     séries de Fourier de Spencer (1971), como no algoritmo solar do NOAA;
-     ver também Meeus, "Astronomical Algorithms" (1998).
-  2. Massa de ar relativa — Kasten & Young (1989), válida até o horizonte.
-  3. Irradiância difusa espectral no plano horizontal — componentes de
-     Rayleigh e de aerossol do modelo SPCTRAL2 de Bird & Riordan (1986),
-     avaliadas no comprimento de onda do enlace.  Nas janelas atmosféricas
-     usadas em QKD (770–860 nm, 1550 nm) as transmitâncias de O3, H2O e
-     gases uniformes são ≈1 e são omitidas (hipótese documentada; para
-     λ dentro de bandas de absorção, usar SPCTRAL2 completo ou MODTRAN).
-     Turbidez de aerossol pela lei de Ångström τ_a = β·λ_µm^(−α)
-     (Ångström 1964; valores típicos de β em Iqbal, "An Introduction to
-     Solar Radiation", 1983: 0,05 limpo / 0,1 médio / 0,2 túrbido).
-  4. Radiância do céu: hipótese de céu isotrópico L = E_dif/π
-     (Liou, "An Introduction to Atmospheric Radiation", 2002, §1.1;
-     aproximação de primeira ordem — o céu claro real varia com o ângulo
-     de espalhamento em relação ao Sol, tipicamente ±(2–5)×).
-  5. Crepúsculo (−18° < h < 0°): decaimento log-linear entre L(h=0) e o
-     piso noturno em h=−18° — consistente com as ~3–4 décadas de queda da
-     radiância zenital medidas por Rozenberg, "Twilight: A Study in
-     Atmospheric Optics" (1966); ver também Patat, A&A 400, 1183 (2003).
-  6. Noite (h ≤ −18°): piso configurável.  Valores de referência
+MODEL CHAIN (clear sky):
+  1. Solar position (declination, equation of time, hour angle) --
+     Spencer's (1971) Fourier series, as in the NOAA solar algorithm;
+     see also Meeus, "Astronomical Algorithms" (1998).
+  2. Relative air mass -- Kasten & Young (1989), valid down to the horizon.
+  3. Spectral diffuse irradiance on the horizontal plane -- Rayleigh and
+     aerosol components of the SPCTRAL2 model of Bird & Riordan (1986),
+     evaluated at the link wavelength. In the atmospheric windows used in
+     QKD (770-860 nm, 1550 nm) the O3, H2O and uniform-gas transmittances
+     are ~1 and are omitted (documented assumption; for a lambda inside an
+     absorption band use full SPCTRAL2 or MODTRAN).
+     Aerosol turbidity from the Angstrom law tau_a = beta*lam_um^(-alpha)
+     (Angstrom 1964; typical beta in Iqbal, "An Introduction to Solar
+     Radiation", 1983: 0.05 clean / 0.1 average / 0.2 turbid).
+  4. Sky radiance: isotropic-sky assumption L = E_dif/pi
+     (Liou, "An Introduction to Atmospheric Radiation", 2002, para. 1.1;
+     a first-order approximation -- a real clear sky varies with the
+     scattering angle to the Sun, typically by a factor of 2-5).
+  5. Twilight (-18 deg < h < 0 deg): log-linear decay between L(h=0) and
+     the night floor at h = -18 deg, consistent with the ~3-4 decades of
+     zenith-radiance drop measured by Rozenberg, "Twilight: A Study in
+     Atmospheric Optics" (1966); see also Patat, A&A 400, 1183 (2003).
+  6. Night (h <= -18 deg): configurable floor. Reference values
      (Er-long Miao et al., New J. Phys. 7, 215 (2005); Bourgoin et al.,
      New J. Phys. 15, 023006 (2013); Pirandola, PRR 3, 023130 (2021)):
-       lua cheia, céu claro : ~1,5e-3 W·m⁻²·µm⁻¹·sr⁻¹ = 1,5e3  SI
-       lua nova,  céu claro : ~1,5e-6 W·m⁻²·µm⁻¹·sr⁻¹ = 1,5e0  SI
+       full moon, clear sky : ~1.5e-3 W·m^-2·um^-1·sr^-1 = 1.5e3 SI
+       new moon,  clear sky : ~1.5e-6 W·m^-2·um^-1·sr^-1 = 1.5e0 SI
 
-UNIDADES: SI estrito.  Radiância espectral em W·m⁻²·m⁻¹·sr⁻¹
-(por METRO de comprimento de onda).  Conversões:
-  1 W·m⁻²·nm⁻¹·sr⁻¹ = 1e9 SI   |   1 W·m⁻²·µm⁻¹·sr⁻¹ = 1e6 SI
-O antigo B_sky=1,5e-2 (por nm) do fork equivale a 1,5e7 SI.
+UNITS: strict SI. Spectral radiance in W·m^-2·m^-1·sr^-1 (per METRE of
+wavelength). Conversions:
+  1 W·m^-2·nm^-1·sr^-1 = 1e9 SI  |  1 W·m^-2·um^-1·sr^-1 = 1e6 SI
+The former fork value B_sky = 1.5e-2 (per nm) equals 1.5e7 SI.
 """
 
 import math
@@ -80,8 +81,8 @@ H_PLANCK = 6.62607015e-34   # J·s
 C_LIGHT = 2.99792458e8      # m/s
 
 # ---------------------------------------------------------------------------
-# Irradiância solar extraterrestre E0(λ) — âncoras do espectro ASTM E490
-# (AM0), em W·m⁻²·m⁻¹ (SI). Interpolação linear entre âncoras.
+# Extraterrestrial solar irradiance E0(lambda) -- anchors of the ASTM E490
+# spectrum (AM0), in W·m^-2·m^-1 (SI). Linearly interpolated in between.
 # ---------------------------------------------------------------------------
 _E0_AM0 = {  # λ [m] : E0 [W·m⁻²·m⁻¹]
     400e-9: 1.60e9, 500e-9: 1.95e9, 550e-9: 1.86e9, 650e-9: 1.55e9,
@@ -91,7 +92,15 @@ _E0_AM0 = {  # λ [m] : E0 [W·m⁻²·m⁻¹]
 
 
 def extraterrestrial_irradiance(wavelength: float) -> float:
-    """E0(λ) [W·m⁻²·m⁻¹] no topo da atmosfera (âncoras ASTM E490)."""
+    """Extraterrestrial spectral irradiance E0 at the top of the atmosphere.
+
+    Args:
+        wavelength: wavelength [m].
+
+    Returns:
+        float: E0 [W·m^-2·m^-1], linearly interpolated between the ASTM
+        E490 anchors and clamped outside their range.
+    """
     lams = sorted(_E0_AM0)
     if wavelength <= lams[0]:
         return _E0_AM0[lams[0]]
@@ -104,35 +113,39 @@ def extraterrestrial_irradiance(wavelength: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# 1. Posição solar — Spencer (1971) / NOAA
+# 1. Solar position -- Spencer (1971) / NOAA
 # ---------------------------------------------------------------------------
 def solar_elevation(when_utc: datetime, latitude: float,
                     longitude: float) -> float:
-    """Elevação solar h [rad] (negativa abaixo do horizonte).
+    """Solar elevation h [rad], negative below the horizon.
 
     Args:
-        when_utc : datetime COM tzinfo UTC (ou naive interpretado como UTC)
-        latitude : [rad], positivo Norte
-        longitude: [rad], positivo Leste
-    Referências: Spencer, Search 2, 172 (1971); NOAA Solar Calculator;
-    Meeus (1998). Precisão ~0,01 rad — suficiente para radiometria.
+        when_utc: datetime WITH UTC tzinfo (naive values are read as UTC).
+        latitude: site latitude [rad], positive North.
+        longitude: site longitude [rad], positive East.
+
+    Returns:
+        float: solar elevation [rad].
+
+    References: Spencer, Search 2, 172 (1971); NOAA Solar Calculator;
+    Meeus (1998). Accuracy ~0.01 rad, sufficient for radiometry.
     """
     if when_utc.tzinfo is None:
         when_utc = when_utc.replace(tzinfo=timezone.utc)
     when_utc = when_utc.astimezone(timezone.utc)
     doy = when_utc.timetuple().tm_yday
     frac_h = when_utc.hour + when_utc.minute / 60 + when_utc.second / 3600
-    # ângulo do ano [rad]
+    # year angle [rad]
     g = 2.0 * math.pi / 365.0 * (doy - 1 + (frac_h - 12.0) / 24.0)
-    # declinação solar [rad] — Spencer (1971)
+    # solar declination [rad] -- Spencer (1971)
     decl = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g)
             - 0.006758 * math.cos(2 * g) + 0.000907 * math.sin(2 * g)
             - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
-    # equação do tempo [min] — Spencer (1971)
+    # equation of time [min] -- Spencer (1971)
     eqt = 229.18 * (0.000075 + 0.001868 * math.cos(g)
                     - 0.032077 * math.sin(g) - 0.014615 * math.cos(2 * g)
                     - 0.040849 * math.sin(2 * g))
-    # hora solar verdadeira e ângulo horário
+    # true solar time and hour angle
     tst = frac_h + eqt / 60.0 + math.degrees(longitude) / 15.0
     hour_angle = math.radians(15.0 * (tst - 12.0))
     sin_h = (math.sin(latitude) * math.sin(decl)
@@ -151,12 +164,21 @@ def kasten_young_airmass(elevation: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# 2. Radiância difusa de céu claro — SPCTRAL2 simplificado (Bird & Riordan)
+# 2. Clear-sky diffuse radiance -- simplified SPCTRAL2 (Bird & Riordan)
 # ---------------------------------------------------------------------------
 def _rayleigh_od(wavelength: float, pressure: float) -> float:
-    """Profundidade óptica de Rayleigh τ_R(λ) na vertical, Bird & Riordan
-    (1986): τ_R = (P/P0)/[λ⁴·(115,6406 − 1,335/λ²)], λ em µm."""
-    lam_um = wavelength * 1e6                    # m → µm (fórmula publicada)
+    """Vertical Rayleigh optical depth tau_R, Bird & Riordan (1986).
+
+    tau_R = (P/P0)/[lam^4*(115.6406 - 1.335/lam^2)], lam in um.
+
+    Args:
+        wavelength: wavelength [m].
+        pressure: station pressure [Pa].
+
+    Returns:
+        float: dimensionless vertical Rayleigh optical depth.
+    """
+    lam_um = wavelength * 1e6                    # m -> um (published form)
     return (pressure / 101325.0) / (lam_um ** 4
                                     * (115.6406 - 1.335 / lam_um ** 2))
 
@@ -166,16 +188,24 @@ def clear_sky_radiance(wavelength: float, elevation: float,
                        angstrom_beta: float = 0.10,
                        angstrom_alpha: float = 1.3,
                        ssa: float = 0.90, asym_g: float = 0.65) -> float:
-    """Radiância espectral do céu claro L [W·m⁻²·m⁻¹·sr⁻¹] para h > 0.
+    """Clear-sky spectral radiance L [W·m^-2·m^-1·sr^-1] for h > 0.
 
-    Componentes difusas de Rayleigh (I_r) e de aerossol (I_a) do SPCTRAL2
-    [Bird & Riordan 1986, Eqs. 3-9 a 3-13], com T_O3=T_H2O=T_gás=1
-    (janelas atmosféricas de QKD) e sem termo de reflexão do solo;
-    L = (I_r + I_a)/π  (céu isotrópico, Liou 2002).
+    Rayleigh (I_r) and aerosol (I_a) diffuse components of SPCTRAL2
+    [Bird & Riordan 1986, Eqs. 3-9 to 3-13], with T_O3 = T_H2O = T_gas = 1
+    (QKD atmospheric windows) and no ground-reflection term;
+    L = (I_r + I_a)/pi (isotropic sky, Liou 2002).
 
-    Parâmetros de aerossol: lei de Ångström τ_a=β·λ_µm^(−α) [Ångström
-    1964; Iqbal 1983], albedo de espalhamento simples ω0 (ssa) e
-    assimetria g típicos continentais [Bird & Riordan 1986].
+    Args:
+        wavelength: wavelength [m].
+        elevation: solar elevation [rad]; returns 0 at or below the horizon.
+        pressure: station pressure [Pa].
+        angstrom_beta: Angstrom turbidity coefficient beta.
+        angstrom_alpha: Angstrom exponent alpha, in tau_a = beta*lam_um^-alpha.
+        ssa: aerosol single-scattering albedo (continental default).
+        asym_g: aerosol asymmetry parameter g (continental default).
+
+    Returns:
+        float: sky radiance [W·m^-2·m^-1·sr^-1].
     """
     if elevation <= 0:
         return 0.0
@@ -188,10 +218,10 @@ def clear_sky_radiance(wavelength: float, elevation: float,
     tau_a = angstrom_beta * lam_um ** (-angstrom_alpha)
 
     T_r = math.exp(-tau_r * M)
-    T_aa = math.exp(-(1.0 - ssa) * tau_a * M)     # absorção do aerossol
-    T_as = math.exp(-ssa * tau_a * M)             # espalhamento do aerossol
+    T_aa = math.exp(-(1.0 - ssa) * tau_a * M)     # aerosol absorption
+    T_as = math.exp(-ssa * tau_a * M)             # aerosol scattering
 
-    # Fração espalhada para baixo pelo aerossol, F_s [Bird & Riordan 1986]
+    # Downward-scattered aerosol fraction F_s [Bird & Riordan 1986]
     alg = math.log(1.0 - asym_g)
     afs = alg * (1.459 + alg * (0.1595 + 0.4129 * alg))
     bfs = alg * (0.0783 + alg * (-0.3824 - 0.5874 * alg))
@@ -203,11 +233,11 @@ def clear_sky_radiance(wavelength: float, elevation: float,
 
 
 # ---------------------------------------------------------------------------
-# 3. B_sky contínuo: dia + crepúsculo + noite
+# 3. Continuous B_sky: day + twilight + night
 # ---------------------------------------------------------------------------
-B_NIGHT_NEW_MOON = 1.5e0    # W·m⁻²·m⁻¹·sr⁻¹  (= 1,5e-6 µm⁻¹) [Miao05/Bourgoin13]
-B_NIGHT_FULL_MOON = 1.5e3   # W·m⁻²·m⁻¹·sr⁻¹  (= 1,5e-3 µm⁻¹) [Pirandola21]
-_TWILIGHT_END = math.radians(-18.0)   # crepúsculo astronômico
+B_NIGHT_NEW_MOON = 1.5e0    # W·m^-2·m^-1·sr^-1 (= 1.5e-6 um^-1) [Miao05/Bourgoin13]
+B_NIGHT_FULL_MOON = 1.5e3   # W·m^-2·m^-1·sr^-1 (= 1.5e-3 um^-1) [Pirandola21]
+_TWILIGHT_END = math.radians(-18.0)   # astronomical twilight
 
 
 def b_sky(wavelength: float, elevation: float,
@@ -215,15 +245,26 @@ def b_sky(wavelength: float, elevation: float,
           angstrom_beta: float = 0.10,
           b_night: float = B_NIGHT_FULL_MOON,
           cloud_factor: float = 1.0) -> float:
-    """Radiância espectral do céu B_sky [W·m⁻²·m⁻¹·sr⁻¹] vs elevação solar.
+    """Sky spectral radiance B_sky [W·m^-2·m^-1·sr^-1] vs solar elevation.
 
     Regimes:
-      h > 0        : céu claro SPCTRAL2 (clear_sky_radiance), ×cloud_factor
-                     (céu encoberto aumenta a radiância difusa ~10×;
-                     Bourgoin et al. 2013, Tab. 2)
-      −18° < h ≤ 0 : interpolação log-linear entre L(h→0⁺) e b_night
-                     [Rozenberg 1966: ~3–4 décadas em 18°]
-      h ≤ −18°     : b_night (lua nova/cheia — B_NIGHT_*)
+      h > 0            : SPCTRAL2 clear sky (clear_sky_radiance) times
+                         cloud_factor (an overcast sky raises the diffuse
+                         radiance by ~10x; Bourgoin et al. 2013, Tab. 2)
+      -18 deg < h <= 0 : log-linear interpolation between L(h->0+) and
+                         b_night [Rozenberg 1966: ~3-4 decades over 18 deg]
+      h <= -18 deg     : b_night (new/full moon, see B_NIGHT_*)
+
+    Args:
+        wavelength: wavelength [m].
+        elevation: solar elevation [rad].
+        pressure: station pressure [Pa].
+        angstrom_beta: Angstrom turbidity coefficient.
+        b_night: night radiance floor [SI].
+        cloud_factor: multiplier applied to the clear-sky daytime radiance.
+
+    Returns:
+        float: B_sky [W·m^-2·m^-1·sr^-1].
     """
     L_day_horizon = clear_sky_radiance(
         wavelength, math.radians(0.5), pressure, angstrom_beta) * cloud_factor
@@ -232,7 +273,7 @@ def b_sky(wavelength: float, elevation: float,
                                angstrom_beta) * cloud_factor
         return max(L, b_night)
     if elevation > _TWILIGHT_END:
-        f = elevation / _TWILIGHT_END            # 0 no pôr do sol → 1 no fim
+        f = elevation / _TWILIGHT_END            # 0 at sunset -> 1 at the end
         logL = ((1.0 - f) * math.log10(max(L_day_horizon, b_night))
                 + f * math.log10(b_night))
         return 10.0 ** logL
@@ -241,37 +282,53 @@ def b_sky(wavelength: float, elevation: float,
 
 def b_sky_at(when_utc: datetime, latitude: float, longitude: float,
              wavelength: float, **kwargs) -> float:
-    """Conveniência: B_sky [SI] a partir de instante UTC e coordenadas
-    [rad] — para uso direto no diurnal_profile() de scenarios.py."""
+    """Convenience wrapper: B_sky from a UTC instant and site coordinates.
+
+    Intended for direct use in the ``diurnal_profile()`` of scenarios.py.
+
+    Args:
+        when_utc: instant in UTC.
+        latitude: site latitude [rad].
+        longitude: site longitude [rad].
+        wavelength: wavelength [m].
+        **kwargs: forwarded to :func:`b_sky` (pressure, b_night, ...).
+
+    Returns:
+        float: B_sky [W·m^-2·m^-1·sr^-1].
+    """
     h = solar_elevation(when_utc, latitude, longitude)
     return b_sky(wavelength, h, **kwargs)
 
 
 # ---------------------------------------------------------------------------
-# 4. Fótons de fundo por modo — CORREÇÃO DO TÓPICO 6
+# 4. Background photons per detection mode
 # ---------------------------------------------------------------------------
 def n_background(wavelength: float, filter_bandwidth: float,
                  detection_gate: float, fov_solid_angle: float,
                  receiver_radius: float, B_sky_si: float) -> float:
-    """n_B — fótons de fundo por modo de detecção (adimensional).
+    """n_B -- dimensionless background photons per detection mode.
 
     Pirandola, PRR 3, 023130 (2021), Eq. (32):
-        n_B = π·λ·Γ_R·B_sky/(h·c),   Γ_R = Δλ·Δt·Ω_fov·a_R²
+        n_B = pi*lambda*Gamma_R*B_sky/(h*c),
+        Gamma_R = d_lambda * d_t * Omega_fov * a_R^2
 
-    Args — TODOS EM SI:
+    Args (ALL IN SI):
         wavelength       [m]
-        filter_bandwidth [m]   Δλ do filtro espectral (1 nm → 1e-9)
-        detection_gate   [s]   Δt — CORREÇÃO (tópico 6): é a JANELA DE
-                               ACEITAÇÃO temporal do clique (gate casado ao
-                               pulso/à resolução do detector), e NÃO o tempo
-                               morto 1/count_rate. Com os parâmetros do fork
-                               (time_resolution=1 ns, 1/count_rate=50 ns),
-                               o uso do tempo morto superestimava o fundo
-                               em 50×. Recomenda-se
-                               Δt = max(time_resolution, largura_do_pulso).
-        fov_solid_angle  [sr]  Ω do campo de visão do receptor
+        filter_bandwidth [m]   spectral filter width (1 nm -> 1e-9)
+        detection_gate   [s]   temporal ACCEPTANCE WINDOW of a click, i.e.
+                               the gate matched to the pulse or to the
+                               detector resolution -- NOT the dead time
+                               1/count_rate. With the parameters of this
+                               fork (time_resolution = 1 ns,
+                               1/count_rate = 50 ns) using the dead time
+                               would overestimate the background by 50x;
+                               see :func:`detection_gate_from_detector`.
+        fov_solid_angle  [sr]  receiver field-of-view solid angle
         receiver_radius  [m]   a_R
-        B_sky_si         [W·m⁻²·m⁻¹·sr⁻¹]  (saída de b_sky/b_sky_at)
+        B_sky_si         [W·m^-2·m^-1·sr^-1] output of b_sky / b_sky_at
+
+    Returns:
+        float: mean number of background photons per detection mode.
     """
     gamma_R = (filter_bandwidth * detection_gate * fov_solid_angle
                * receiver_radius ** 2)
@@ -280,7 +337,17 @@ def n_background(wavelength: float, filter_bandwidth: float,
 
 def detection_gate_from_detector(time_resolution_ps: float,
                                  pulse_width_s: float = 0.0) -> float:
-    """Δt [s] recomendado para n_background: gate casado à resolução
-    temporal do detector (parâmetro `time_resolution` do SeQUeNCe, em ps)
-    ou à largura do pulso, o que for maior."""
+    """Recommended detection gate [s] for :func:`n_background`.
+
+    The gate is matched to the detector temporal resolution (SeQUeNCe's
+    ``time_resolution`` parameter, in ps) or to the pulse width, whichever
+    is larger.
+
+    Args:
+        time_resolution_ps: detector time resolution [ps].
+        pulse_width_s: optical pulse width [s].
+
+    Returns:
+        float: acceptance window [s].
+    """
     return max(time_resolution_ps * 1e-12, pulse_width_s)

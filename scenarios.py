@@ -26,41 +26,34 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
     it should return a dict here.
 
     Args:
-        hour (float): local time in fractional hours (0..23). Example: hour=13,515 (13:30:54)
+        hour (float): local time in fractional hours (0..23). Example: hour=13.515 (13:30:54)
         base_loss_parameters (dict): base loss-parameter dict. Only the
             atmospheric quantities are overwritten by the hourly profile;
             everything else (geometry, source aperture, raindrop size,
             etc.) is preserved verbatim.
         base_thermal_params (dict): base thermal-noise dict. Only
-            ``B_sky`` is overwritten (day/night switch).
-        ls_params (dict): light-source params. Currently unused -- kept
-            in the signature for symmetry with :func:`sim_scenario` and
-            forward-compatibility with scenarios that vary the laser.
+            ``B_sky`` is overwritten (continuous solar-elevation model).
+        ls_params (dict): light-source params. Only ``wavelength`` is read
+            (by ``b_sky_at``); kept in the signature for symmetry with
+            :func:`sim_scenario` and for scenarios that vary the laser.
         sunrise, sunset (float): local solar times in fractional hours.
-        link_altitude_m (float): link mid-altitude above sea level [m].
+        site_altitude (float): site altitude above sea level [m], used by
+            ``wind_speed_perp``.
+        latitude, longitude (float): site coordinates [rad], used to
+            compute the solar elevation.
+        local_tz (timezone): time zone of the measurement timestamps, so
+            they can be converted to UTC for the solar position.
+        date (str): ISO date of the measurement day ("YYYY-MM-DD").
+        dataframe (pd.DataFrame): meteorological table indexed by
+            timestamp in column 0, with pressure (3), temperature (4),
+            relative humidity (5), precipitation (6) and wind speed (7).
 
     Returns:
         tuple: (loss_parameters, thermal_params, ls_overrides).
     """
-    '''
-    horas = int(hour)
-    resto_minutos = (hour - horas) * 60
-    minutos = int(resto_minutos)
-    segundos = round((resto_minutos - minutos) * 60)
-
-    # Ajuste caso o arredondamento dos segundos ou minutos chegue a 60
-    if segundos == 60:
-        segundos = 0
-        minutos += 1
-    if minutos == 60:
-        minutos = 0
-        horas += 1
-    
-    date = datetime.strptime(date+" "+str(horas)+":"+str(minutos)+":"+str(segundos), "%Y-%m-%d %H:%M:%S")
-    '''
     when_local = datetime.fromisoformat(date) + timedelta(hours=hour)
-    correspondencias = dataframe.index[dataframe[0] == when_local]
-    index = correspondencias[0] if len(correspondencias) > 0 else None
+    matches = dataframe.index[dataframe[0] == when_local]
+    index = matches[0] if len(matches) > 0 else None
     
     T  = float(dataframe[4][index]) + 273.15          # °C -> K
     P  = float(dataframe[3][index]) * 100.0           # hPa -> Pa   (SI!)
@@ -79,7 +72,8 @@ def diurnal_profile(hour, *, base_loss_parameters, base_thermal_params,
           "wind_speed_perp": wind_speed_perp(site_altitude, u),
           "precipitation_rate": p_rate, "C_n2": cn}
 
-    # B_sky contínuo (substitui o chaveamento binário dia/noite):
+    # Continuous B_sky from the solar elevation (replaces the former
+    # binary day/night switch).
     when = when_local.replace(tzinfo=local_tz).astimezone(timezone.utc)
     tp = {**base_thermal_params, "B_sky": b_sky_at(when, latitude, longitude, ls_params["wavelength"], pressure=P)}
 

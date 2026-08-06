@@ -557,8 +557,8 @@ class QKDNode(Node):
         elif encoding["name"] == "time_bin_cow":
             # Replace the generic QSDetector with QSDetectorCOW
             path_diff = slot_period_ps(lightsource.frequency)
-            # t_B=0.58 é escolha do projeto (Stucki 2005 usa ~0.9 p/ a
-            # linha de dados); não configurável via detector_params por ora.
+            # t_B=0.58 is a project choice (Stucki 2005 uses ~0.9 for the
+            # data line); not configurable through detector_params yet.
             qsdetector = QSDetectorCOW(qsd_name, timeline, path_diff=path_diff, t_B=0.58)
         else:
             raise Exception("invalid encoding {} given for QKD node {}".format(encoding["name"], name))
@@ -1045,13 +1045,13 @@ class EveNode(Node):
         self.destination: str | None = None   # definido antes de tl.init()
         self.intercept_rate: float = intercept_rate
 
-        # Estatísticas do ataque
+        # Attack statistics.
         self.intercepted_count: int = 0
         self.forwarded_count: int = 0
         self.intercepted_bits:  list[int] = []
         self.intercepted_bases: list[int] = []
 
-    # ── Recepção de fótons ────────────────────────────────────────────
+    # -- Photon reception --
 
     def receive_qubit(self, src: str, photon) -> None:
         """Called by the Alice→Eve quantum channel upon delivering a photon.
@@ -1065,7 +1065,7 @@ class EveNode(Node):
             photon: Photon object received.
         """
         if photon.is_null:
-            # Perda ocorreu antes de Eve: propaga o fóton nulo para Bob.
+            # The loss happened before Eve: forward the null photon to Bob.
             self.send_qubit(self.destination, photon)
             return
 

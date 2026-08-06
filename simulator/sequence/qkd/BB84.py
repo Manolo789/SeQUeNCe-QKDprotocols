@@ -251,12 +251,9 @@ class BB84(StackProtocol):
 
             # generate basis/bit list
             num_pulses = round(self.light_time * self.ls_freq)
-            # CORREÇÃO (reprodutibilidade): `numpy.random.choice` usa o
-            # gerador GLOBAL legado do NumPy, que NÃO é semeado por
-            # Node.set_seed(). As bases e os bits de Alice/Bob eram, por
-            # isso, sorteados a partir da entropia do SO -- a simulação
-            # inteira ficava irreprodutível e cada ponto das varreduras
-            # (com key_num=1) virava uma realização única e não repetível.
+            # `numpy.random.choice` would use NumPy's legacy GLOBAL
+            # generator, which `Node.set_seed()` does not seed; drawing the
+            # bases and bits from the node RNG keeps the run reproducible.
             rng = self.owner.get_generator()
             basis_list = rng.choice([0, 1], num_pulses)
             bit_list = rng.choice([0, 1], num_pulses)

@@ -57,91 +57,103 @@ _c = 2.99792458e8     # m/s
 
 
 class ThermalNoiseSource(Entity):
-    """Source of background thermal photons for FSO link.
+    """Source of background thermal photons for an FSO link.
 
-    Emite fótons com estado aleatório, modelando a radiância
-    do céu que penetra pela abertura do receptor.
+    Emits photons in a random state, modelling the sky radiance collected
+    through the receiver aperture.
 
     Attributes:
-        n_B (float)      : fótons de fundo por modo [adimensional]
-        frequency (float): frequência de clock [Hz]
-        encoding_type (dict): tipo de codificação
-        active (bool)    : liga/desliga a fonte
+        n_B (float): background photons per mode [dimensionless]
+        frequency (float): clock frequency [Hz]
+        encoding_type (dict): encoding scheme of the emitted photons
+        active (bool): switches the source on and off
     """
 
     def __init__(self, name: str, timeline: "Timeline", n_B: float, frequency: float, encoding_type: dict = None, detection_gate: float = None, seed: int = None) -> None:
+        """Build a seeded background source and derive its emission rate.
+
+        The source keeps its OWN seeded generator because this Entity is
+        not registered on a Node: with ``self.owner is None``,
+        ``Entity.get_generator()`` would fall back to an unseeded
+        ``default_rng()`` on every call, which both breaks reproducibility
+        (even with alice/bob seeds fixed) and allocates one Generator per
+        background photon.
+
+        The emission rate implements the temporal gating that the
+        simulator's Detector lacks. n_B (Pirandola PRR 3, 023130, Eq. 32)
+        is defined per temporal MODE of duration ``detection_gate``, so the
+        raw sky rate is n_B/detection_gate; a QKD receiver only accepts the
+        gate (~1 ns) centred on each pulse (period 1/frequency, ~125 ns).
+        Applying that duty cycle here gives
+        lambda = (n_B/detection_gate) * (detection_gate * frequency)
+               = n_B * frequency  [DETECTABLE photons/s].
+        Injecting the raw rate instead would overestimate the counts by the
+        period/gate ratio (~125x in the base scenario), saturate the
+        detector dead time (QBER ~ 0.3) and inflate the timeline event
+        count by the same factor.
+
+        Args:
+            name: entity name.
+            timeline: timeline that owns this entity.
+            n_B: background photons per detection mode.
+            frequency: clock frequency of the link [Hz].
+            encoding_type: encoding scheme; polarization when None.
+            detection_gate: temporal acceptance window [s].
+            seed: seed of the source RNG, for reproducibility.
+        """
         Entity.__init__(self, name, timeline)
 
         if encoding_type is None:
             encoding_type = polarization
 
-        # CORREÇÃO (reprodutibilidade): esta Entity NÃO é registrada em um
-        # Node, logo `self.owner is None` e `Entity.get_generator()` cai no
-        # ramo `default_rng()` -- um gerador NOVO e SEM SEMENTE a cada
-        # chamada (uma vez por _schedule_next e uma por _random_state).
-        # Consequências: (a) a simulação deixa de ser reprodutível mesmo
-        # com alice.set_seed()/bob.set_seed() fixos; (b) instancia-se um
-        # Generator por fóton de fundo (custo desnecessário). Guardamos um
-        # gerador próprio e semeado, usado enquanto não houver `owner`.
         self._rng = default_rng(seed)
-
 
         self.n_B = n_B
         self.frequency = frequency
         self.encoding_type = encoding_type
         self.detection_gate = detection_gate
         self.active = True
-
-        # CORREÇÃO (v2): n_B (Pirandola PRR 3, 023130, Eq. 32) é definido
-        # por MODO temporal de duração detection_gate (o Delta_t usado em
-        # n_background). Um emissor de céu é de fato uniforme no tempo com
-        # taxa bruta lambda_raw = n_B / detection_gate, MAS o receptor QKD
-        # aplica filtragem temporal: só o gate (~1 ns) centrado em cada
-        # pulso (período 1/frequency, ~125 ns) é aceito. Como o Detector do
-        # simulador NÃO possui gate temporal (aceita fótons em qualquer
-        # instante do período), o gate precisa ser aplicado AQUI, na fonte,
-        # via ciclo de trabalho (detection_gate * frequency):
-        #     lambda = (n_B / detection_gate) * (detection_gate * frequency)
-        #            = n_B * frequency          [fótons/s DETECTÁVEIS]
-        # A versão anterior (n_B / detection_gate) injetava TODO o fundo
-        # bruto num detector sem gate: superestimava as contagens pelo
-        # fator período/gate (~125x no cenário-base), saturava o dead time
-        # do detector (QBER ~ 0.3) e multiplicava por ~125x o número de
-        # eventos da timeline, travando as varreduras paralelas.
         self._recompute_rate()
 
     def _recompute_rate(self) -> None:
-        """(Re)calcula a taxa efetiva de fótons de fundo detectáveis."""
+        """(Re)compute the effective rate of DETECTABLE background photons.
+
+        See :meth:`__init__` for why the duty cycle is applied here.
+        """
         if self.frequency is not None and self.frequency > 0:
-            # Modelo gateado: n_B fótons por gate x frequency gates/s.
+            # Gated model: n_B photons per gate x frequency gates/s.
             self._arrival_rate = self.n_B * self.frequency
         elif self.detection_gate is not None and self.detection_gate > 0:
-            # Sem frequência de referência: fundo bruto, sem gate.
+            # No reference frequency: raw background, ungated.
             import warnings
             warnings.warn(
-                "ThermalNoiseSource sem frequency: usando taxa bruta "
-                "n_B/detection_gate (sem gate temporal). O detector do "
-                "simulador não possui gate; as contagens de fundo serão "
-                "superestimadas pelo fator período/gate.",
+                "ThermalNoiseSource without frequency: using the raw rate "
+                "n_B/detection_gate (no temporal gate). The simulator's "
+                "detector has no gate, so the background counts will be "
+                "overestimated by the period/gate ratio.",
                 RuntimeWarning)
             self._arrival_rate = self.n_B / self.detection_gate
         else:
             self._arrival_rate = 0.0
             
     def get_generator(self):
-        """Gerador semeado da fonte (ou o do nó, se houver `owner`)."""
+        """Return the seeded generator: the owner node's when there is one.
+
+        Returns:
+            np.random.Generator: RNG used by this source.
+        """
         if hasattr(self.owner, "get_generator"):
             return self.owner.get_generator()
         return self._rng
 
     def init(self) -> None:
-        """Agenda o primeiro evento de emissão de fóton de fundo."""
+        """Schedule the first background-photon emission event."""
         if self._arrival_rate > 0 and self.active:
             self._schedule_next()
 
     def _schedule_next(self) -> None:
-        """Agenda próximo fóton de fundo"""
-        # Intervalo exponencial: E[T] = 1/λ  (em segundos)
+        """Schedule the next background photon (Poisson arrivals)."""
+        # Exponential interval: E[T] = 1/lambda (in seconds).
         dt_s = self.get_generator().exponential(1.0 / self._arrival_rate)
         dt_ps = int(dt_s * 1e12)
 
@@ -151,7 +163,7 @@ class ThermalNoiseSource(Entity):
         self.timeline.schedule(event)
 
     def _emit(self) -> None:
-        """Cria um fóton de fundo com estado aleatório e o envia ao detector."""
+        """Create a background photon in a random state and send it on."""
         if not self.active:
             return
 
@@ -162,35 +174,36 @@ class ThermalNoiseSource(Entity):
             encoding_type = self.encoding_type,
             quantum_state = state,
         )
-        # CORREÇÃO: luz térmica tem fase aleatória — sem coerência com
-        # os pulsos do sinal. Marca o fóton como incoerente para que pares
-        # acidentais (sinal, fundo) no Michelson roteiem 50/50 em vez de
-        # interferir com fase determinística (channel_phase=0).
+        # Thermal light has a random phase, hence no coherence with the
+        # signal pulses: accidental (signal, background) pairs must route
+        # 50/50 in the Michelson instead of interfering at channel_phase=0.
         photon.coherent = False
-        # Fóton real → passa pela eficiência η_eff do Detector
+        # A real photon, so it goes through the Detector efficiency.
         self._receivers[0].get(photon)
 
-        # Agenda o próximo fóton
+        # Schedule the next photon.
         self._schedule_next()
 
     def _random_state(self) -> tuple:
-        """Estado quântico aleatório para simular fundo incoerente.
+        """Random quantum state modelling an incoherent background.
 
-        Polarização: estado aleatório na esfera de Bloch (equatorial)
-        time_bin_cow: early ou late com probabilidade igual
+        Polarisation: random (equatorial) state on the Bloch sphere.
+        time_bin / time_bin_cow: early or late with equal probability.
+
+        Returns:
+            tuple: the quantum state accepted by ``Photon.__init__``.
         """
         rng = self.get_generator()
 
         if self.encoding_type["name"] == "polarization":
-            # Ângulo de polarização uniforme em [0, π)
+            # Polarisation angle uniform in [0, pi).
             theta = rng.uniform(0, math.pi)
             return (complex(math.cos(theta)), complex(math.sin(theta)))
 
         elif self.encoding_type["name"] in ("time_bin", "time_bin_cow"):
-            # Chegada no bin early (0) ou late (1) com p=0.5.
-            # Photon.__init__ exige `tuple`; time_bin_cow["early"/"late"] sao
-            # np.ndarray (EARLY_STATE/LATE_STATE) -> converter com tuple().
-
+            # Arrival in the early (0) or late (1) bin with p=0.5.
+            # Photon.__init__ requires a tuple, while time_bin_cow entries
+            # are np.ndarray, hence the explicit tuple() conversion.
             if rng.random() < 0.5:
                 return tuple(time_bin_cow["early"]) if "cow" in self.encoding_type["name"] \
                         else (complex(1), complex(0))
@@ -198,18 +211,16 @@ class ThermalNoiseSource(Entity):
                 return tuple(time_bin_cow["late"]) if "cow" in self.encoding_type["name"] \
                         else (complex(0), complex(1))
         else:
-            # Fallback genérico: superposição uniforme
+            # Generic fallback: uniform superposition.
             return (complex(1 / math.sqrt(2)), complex(1 / math.sqrt(2)))
 
     def set_n_B(self, n_B: float) -> None:
-        """Atualiza n_B em tempo de execução (ex: transição noite→dia)."""
-        self.n_B = n_B
-        self._recompute_rate()   # mesma regra do construtor (antes usava
-                                 # sempre n_B*frequency, inconsistente)
+        """Update n_B at run time, e.g. on a night-to-day transition.
 
-    #def update_from_params(self, wavelength_nm: float, delta_lambda_nm: float, delta_t_ns: float, omega_fov_sr: float, a_R_cm: float, B_sky: float) -> float:
-    #    """Calcula n_B via Eq.(32) e atualiza a fonte. Retorna n_B calculado."""
-    #    n_B = n_background(wavelength_nm, delta_lambda_nm, delta_t_ns, omega_fov_sr, a_R_cm, B_sky)
-    #    self.set_n_B(n_B)
-    #    return n_B
-    
+        Args:
+            n_B: new number of background photons per detection mode.
+        """
+        self.n_B = n_B
+        self._recompute_rate()   # same rule as the constructor
+
+

@@ -70,7 +70,7 @@ class Photon:
         self.encoding_type: dict[str, Any] = encoding_type
         self.is_null: bool = False
         self.loss: float = 0
-        self.coherent: bool = True   # False quando o fóton foi medido por Eve
+        self.coherent: bool = True   # False once the photon was measured by Eve
         self.channel_phase: float = 0.0
         self.use_qm = use_qm
 

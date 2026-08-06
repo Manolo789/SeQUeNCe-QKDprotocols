@@ -347,8 +347,8 @@ class COW(StackProtocol):
             num_symbols = int(self.light_time * self.ls_freq / 2)
 
             # Randomly assign data bits and flag decoy symbols
-            # CORREÇÃO: ver BB84.begin_photon_pulse -- o gerador global do
-            # NumPy não é semeado por Node.set_seed().
+            # See BB84.begin_photon_pulse: NumPy's global generator is not
+            # seeded by Node.set_seed(), so the node RNG is used instead.
             rng = self.owner.get_generator()
             bit_list  = rng.choice([0, 1], num_symbols)
             is_decoy  = rng.random(num_symbols) < self.decoy_rate
@@ -415,10 +415,10 @@ class COW(StackProtocol):
             detected_indices: List[int] = []
             detected_bits:    List[int] = []
 
-            # Otimizado — operações numpy vetorizadas
+            # Optimised: vectorised numpy operations.
             raw = numpy.array(raw_bits)
             early = raw[0::2]   # slots pares
-            late  = raw[1::2]   # slots ímpares
+            late  = raw[1::2]   # odd slots
 
             mask_bit1 = (early == -1) & (late != -1)
             mask_bit0 = (early != -1) & (late == -1)
@@ -434,7 +434,7 @@ class COW(StackProtocol):
             detected_indices = all_indices[order].tolist()
             detected_bits    = all_bits[order].tolist()
             
-            # ── CORREÇÃO: enfileira dados deste burst (não acumula na lista) ──
+            # Queue the data of THIS burst only (do not accumulate).
             self._burst_queue.append((detected_indices, detected_bits))
 
             # FIX: per-burst visibility logging only (for debug).

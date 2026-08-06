@@ -301,7 +301,7 @@ class MichelsonInterferometer(Entity):
         )
         
         if not is_coherent:
-            # Fase relativa aleatória → roteamento 50/50
+            # Random relative phase -> 50/50 routing.
             idx = int(self.get_generator().random() > 0.5)
             
             if hasattr(self.owner, "record_interference"):

@@ -1,5 +1,6 @@
 import os
 import gc
+import math
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ def _save_and_close(fig, path):
     across a long batch of figures, instead of letting it creep up until the OS
     kills the process (the ``Killed`` symptom seen mid-run).
     """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fig.savefig(path, dpi=SAVE_DPI, bbox_inches="tight")
     plt.close(fig)
     gc.collect()
@@ -36,7 +38,15 @@ def _save_and_close(fig, path):
 # ═══════════════════════════════════════════════════════════════════════
 #  Configuration
 # ═══════════════════════════════════════════════════════════════════════
-DATA_DIR = "data"
+# Directory holding the metrics CSVs.  The realistic free-space campaign
+# writes to "data" and the attenuation-only reference campaign to
+# "data/reference_link"; point PLOT_DATA_DIR at the latter to plot it.
+DATA_DIR = os.environ.get("PLOT_DATA_DIR", "data")
+
+# Draw error bars (mean +- 1 standard error) whenever the simulator exported
+# the "<metric>_sem-<protocol>" columns.  Set PLOT_ERRORBARS=std to show the
+# sample standard deviation instead, or PLOT_ERRORBARS=none to disable them.
+ERRORBAR_KIND = os.environ.get("PLOT_ERRORBARS", "sem").lower()
 
 # Canonical protocol order (used to keep legend/line order stable).
 # Prepare-and-measure protocols (BB84/B92/COW) and entanglement-based ones
@@ -209,10 +219,12 @@ def safe_log10(values) -> np.ndarray:
 
 
 def _label(sweep_var: str) -> str:
+    """Human-readable X-axis label of a sweep (falls back to its raw name)."""
     return X_LABELS.get(sweep_var, sweep_var)
 
 
 def _short_sweep(sweep_var: str) -> str:
+    """Abbreviated sweep name used in the crowded grid legends."""
     return SWEEP_SHORT.get(sweep_var, sweep_var)
 
 
@@ -248,6 +260,7 @@ def _wants_log_x(values) -> bool:
 
 
 def _x_scale(sweep_var: str, values) -> str:
+    """X-axis scale of a sweep: the explicit override, else the heuristic."""
     return X_SCALE_OVERRIDE.get(
         sweep_var, "log" if _wants_log_x(values) else "linear"
     )
@@ -265,19 +278,37 @@ def _present_protocols(df: pd.DataFrame, suffix: str, protocols=None) -> list:
 
 
 def _legenda(metric: str, proto: str, suffix: str) -> str:
-    """Rótulo de legenda em português: 'R_sk do BB84', 'QBER do B92 com Eve'."""
+    """Build the Portuguese legend label shown in the figures.
+
+    The figures are published in Portuguese, hence 'R_sk do BB84' or
+    'QBER do B92 com Eve'.
+
+    Args:
+        metric: metric name as it should appear (e.g. "R_sk", "QBER").
+        proto: protocol name.
+        suffix: "" for the eavesdropper-free scenario, "+Eve" otherwise.
+
+    Returns:
+        str: the legend entry.
+    """
     base = f"{metric} do {proto}"
     return base + (" com Eve" if suffix else "")
 
 
 def _skr_ylabel(protocols=None) -> str:
-    """Eixo de R_sk — mesma unidade nas DUAS familias.
+    """Y-axis label of R_sk -- the SAME unit for both protocol families.
 
-    Desde que os protocolos de emaranhamento passaram a ser orientados a
-    keysize, ambas as famílias são pós-processadas pelo MESMO estimador
-    (``QKD_Extension._collect_metrics``) com o MESMO denominador
-    (``send_bits_length``), de modo que R_sk e R_s são
-    dados em bits por qubit enviado para os cinco protocolos.
+    Since the entanglement-based protocols became key-size driven, both
+    families are post-processed by the SAME estimator
+    (``QKD_Extension._collect_metrics``) with the SAME denominator
+    (``send_bits_length``), so R_sk and R_s are expressed in bits per qubit
+    sent for all five protocols.
+
+    Args:
+        protocols: unused; kept so callers can pass the panel's subset.
+
+    Returns:
+        str: the axis label.
     """
     return ("log₁₀ Taxa de chave secreta (R_sk)\n"
             "[bits por qubit enviado]")
@@ -292,6 +323,78 @@ def _series(df: pd.DataFrame, metric: str, proto: str, suffix: str):
     if not np.any(np.isfinite(vals)):
         return None
     return vals
+
+
+def _errors(df: pd.DataFrame, metric: str, proto: str, suffix: str,
+            scale: float = 1.0):
+    """Error-bar half-width of a metric, or None when unavailable.
+
+    The simulator exports one dispersion column per sampled metric:
+    ``_sem`` (standard error of the mean over the generated keys) and
+    ``_std`` (sample standard deviation).  Which one is drawn is chosen by
+    the ``PLOT_ERRORBARS`` environment variable.
+
+    Args:
+        df: sweep dataframe.
+        metric: metric label as used in the column names (e.g. "R_sk").
+        proto: protocol name.
+        suffix: "" or "+Eve".
+        scale: factor applied to the values (e.g. 100 for percentages).
+
+    Returns:
+        np.ndarray | None: the error bars, already scaled.
+    """
+    if ERRORBAR_KIND not in ("sem", "std"):
+        return None
+    err = _series(df, f"{metric}_{ERRORBAR_KIND}", proto, suffix)
+    if err is None:
+        return None
+    return np.abs(err) * scale
+
+
+def _log10_errors(y, err):
+    """Propagate a linear error bar onto a log10 axis.
+
+    For z = log10(y) the first-order propagation is dz = dy / (y * ln 10),
+    which is what keeps the bars visually consistent with the plotted
+    quantity.  Non-positive or missing points get NaN, so they are skipped.
+
+    Args:
+        y: the plotted values in linear scale.
+        err: their linear error bars (may be None).
+
+    Returns:
+        np.ndarray | None: the error bars in log10 units.
+    """
+    if err is None:
+        return None
+    y = np.asarray(y, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.asarray(err, dtype=float) / (y * math.log(10.0))
+    out[~np.isfinite(out)] = np.nan
+    return out
+
+
+def _plot_with_errors(ax, x, y, err, *, label, style):
+    """Draw one curve, with error bars when the dispersion is available.
+
+    Args:
+        ax: target axes.
+        x: X values.
+        y: Y values.
+        err: error-bar half-widths, or None for a plain line.
+        label: legend entry.
+        style: styling kwargs of the curve.
+
+    Returns:
+        The handle carrying the legend entry: a Line2D without error bars,
+        an ErrorbarContainer with them (both expose ``get_label``).
+    """
+    if err is None or not np.any(np.isfinite(err)):
+        (line,) = ax.plot(x, y, label=label, **style)
+        return line
+    return ax.errorbar(x, y, yerr=err, label=label, capsize=2,
+                       elinewidth=0.8, **style)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -319,8 +422,10 @@ def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear",
         y = _series(df, "R_sk", p, suffix)
         if y is None:
             continue
-        (ln,) = ax_top.plot(x, safe_log10(y), label=_legenda("R_sk", p, suffix), **SKR_STYLE[p])
-        handles.append(ln)
+        err = _log10_errors(y, _errors(df, "R_sk", p, suffix))
+        handles.append(_plot_with_errors(
+            ax_top, x, safe_log10(y), err,
+            label=_legenda("R_sk", p, suffix), style=SKR_STYLE[p]))
     ax_top.set_ylabel(_skr_ylabel(protocols))
     ax_top.grid(True)
 
@@ -330,8 +435,9 @@ def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear",
         y = _series(df, "QBER", p, suffix)
         if y is None:
             continue
-        (ln,) = ax_q.plot(x, y * 100, label=_legenda("QBER", p, suffix), **QBER_STYLE[p])
-        handles.append(ln)
+        handles.append(_plot_with_errors(
+            ax_q, x, y * 100, _errors(df, "QBER", p, suffix, 100),
+            label=_legenda("QBER", p, suffix), style=QBER_STYLE[p]))
     ax_q.set_ylabel("QBER [%]")
 
     # — Bottom: useful-bit rate —
@@ -339,8 +445,9 @@ def plot_scenario(df, sweep_var, suffix, title, out_path, x_scale="linear",
         y = _series(df, "R_s", p, suffix)
         if y is None:
             continue
-        (ln,) = ax_bot.plot(x, y * 100, label=_legenda("R_s", p, suffix), **RS_STYLE[p])
-        handles.append(ln)
+        handles.append(_plot_with_errors(
+            ax_bot, x, y * 100, _errors(df, "R_s", p, suffix, 100),
+            label=_legenda("R_s", p, suffix), style=RS_STYLE[p]))
     ax_bot.set_xlabel(_label(sweep_var))
     ax_bot.set_ylabel("R_s - Taxa de bits úteis [%]")
     ax_bot.set_xscale(x_scale)
@@ -371,8 +478,9 @@ def plot_visibility(df, sweep_var, title, out_path, x_scale="linear"):
         y = pd.to_numeric(df[f"Visibility-COW{suffix}"], errors="coerce").to_numpy(float)
         if not np.any(np.isfinite(y)):
             continue
-        (ln,) = ax.plot(x, y, label=_legenda("V", "COW", suffix), **VIS_STYLE[suffix])
-        handles.append(ln)
+        handles.append(_plot_with_errors(
+            ax, x, y, _errors(df, "Visibility", "COW", suffix),
+            label=_legenda("V", "COW", suffix), style=VIS_STYLE[suffix]))
     if not handles:
         plt.close(fig)
         return
@@ -412,9 +520,9 @@ def plot_chsh(df, sweep_var, title, out_path, x_scale="linear"):
         y = pd.to_numeric(df[f"CHSH_S-E91{suffix}"], errors="coerce").to_numpy(float)
         if not np.any(np.isfinite(y)):
             continue
-        (ln,) = ax.plot(x, np.abs(y), label=_legenda("|S|", "E91", suffix),
-                        **CHSH_STYLE[suffix])
-        handles.append(ln)
+        handles.append(_plot_with_errors(
+            ax, x, np.abs(y), _errors(df, "CHSH_S", "E91", suffix),
+            label=_legenda("|S|", "E91", suffix), style=CHSH_STYLE[suffix]))
     if not handles:
         plt.close(fig)
         return
@@ -499,6 +607,19 @@ def plot_dual_graph(df_left, df_right, suffix, title, filename,
 
     def _draw_column(ax_top, ax_bot, df, subtitle,
                      show_left_ylabel=True, show_right_ylabel=True):
+        """Fill one column of the side-by-side figure with a sweep.
+
+        Args:
+            ax_top: axes of the R_sk / QBER panel.
+            ax_bot: axes of the R_s panel.
+            df: dataframe of the sweep drawn in this column.
+            subtitle: title placed above the column.
+            show_left_ylabel: whether to label the left-hand Y axis.
+            show_right_ylabel: whether to label the twin (QBER) axis.
+
+        Returns:
+            list: the Line2D handles, used to build the shared legend.
+        """
         sweep_var = df.columns[0]
         x = np.asarray(df[sweep_var], dtype=float)
         # This dual figure compares distance vs. key size. Both axes now mean
@@ -853,6 +974,15 @@ def _build_title(sweep_var, per_line: int = 5) -> str:
 
 
 def main():
+    """Render every figure for the campaign found in ``DATA_DIR``.
+
+    Reads each ``metrics_variable-*`` / ``metrics_scenario-*`` CSV listed in
+    :data:`SWEEPS`, draws the per-sweep figures (with error bars when the
+    dispersion columns are present) and then the cross-sweep comparisons.
+    Point ``PLOT_DATA_DIR`` at ``data/reference_link`` to render the
+    attenuation-only campaign instead of the realistic free-space one; the
+    figures are written next to the CSVs they came from.
+    """
     # Fixed operating point (matches QKD_Extension.py).  Attenuation is no longer
     # a parameter here: channel loss is computed dynamically by loss.py.
     distance = 700     # m
