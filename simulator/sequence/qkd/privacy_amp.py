@@ -31,22 +31,22 @@ extractor keeps the output independent of the seed, so the announcement is
 safe. Bob applies the same function to his (identical, post error
 correction) string; both obtain the same final key of ``l`` bits.
 
-Implementation note: the extractor is realised as a seeded BLAKE2b in
-counter mode over the input string. This is a computational stand-in for a
-Toeplitz two-universal hash; at the metric level the two are equivalent,
-because the campaign statistics depend only on the OUTPUT LENGTH ``l``
-(the composable epsilons are carried analytically by the entropy layer)
-and on the equality of Alice's and Bob's outputs, which is guaranteed for
-identical inputs by any deterministic function of (input, seed). A
-GF(2)-Toeplitz implementation can be swapped in without touching the rest
-of the stack.
+Implementation note: the extractor IS a Toeplitz hash over GF(2) -- the
+canonical two-universal family (Wolf, Example 4.3). The public seed
+expands, through a seeded PRNG, into the ``n + l - 1`` diagonal bits
+``d`` that define the l x n binary Toeplitz matrix ``T[i][j] =
+d[i - j + n - 1]``, and the final key is ``y = T x mod 2``. The
+matrix-vector product is evaluated as a convolution (``y_i =
+(x * d)[n - 1 + i] mod 2``), computed directly for short keys and via
+FFT for long ones, so the cost is O(n log n) instead of O(n l).
 """
 
 from __future__ import annotations
 
-import hashlib
 from enum import Enum, auto
 from typing import TYPE_CHECKING
+
+import numpy as np
 
 from ..message import Message
 from ..protocol import StackProtocol
@@ -57,34 +57,47 @@ if TYPE_CHECKING:
 
 
 def two_universal_extract(bits: list, seed: int, out_len: int) -> list:
-    """Compress ``bits`` to ``out_len`` bits with the seeded extractor.
+    """Compress ``bits`` to ``out_len`` bits with a GF(2) Toeplitz hash.
+
+    The seed deterministically generates the ``n + out_len - 1`` diagonal
+    bits of the Toeplitz matrix (both parties expand the same public seed
+    into the same matrix), and the output is the GF(2) matrix-vector
+    product, evaluated as the middle slice of the binary convolution of
+    the input with the diagonal:
+
+        y_i = sum_j T[i][j] x_j = (x * d)[n - 1 + i]   (mod 2).
+
+    For inputs above ~4096 bits the convolution runs through the FFT; the
+    linear sums are bounded by ``n`` (< 2^53), so rounding the real FFT
+    back to integers is exact for every campaign key size.
 
     Args:
-        bits (list[int]): reconciled key.
+        bits (list[int]): reconciled key (x, length n).
         seed (int): public extractor seed (chosen by Alice).
         out_len (int): output length l from the entropy-estimation layer.
 
     Returns:
         list[int]: final key bits (empty when ``out_len`` <= 0).
     """
-    if out_len <= 0 or not bits:
+    n = len(bits)
+    if out_len <= 0 or n == 0:
         return []
-    payload = bytes(bits)
-    seed_bytes = int(seed).to_bytes(16, "big", signed=False)
-    out = []
-    counter = 0
-    while len(out) < out_len:
-        block = hashlib.blake2b(payload,
-                                key=seed_bytes[:32],
-                                salt=counter.to_bytes(8, "big")[:8],
-                                digest_size=64).digest()
-        for byte in block:
-            for shift in range(7, -1, -1):
-                out.append((byte >> shift) & 1)
-                if len(out) == out_len:
-                    return out
-        counter += 1
-    return out
+    out_len = min(out_len, n)
+    rng = np.random.default_rng(int(seed) & ((1 << 128) - 1))
+    diag = rng.integers(0, 2, size=n + out_len - 1, dtype=np.int64)
+    x = np.asarray(bits, dtype=np.int64)
+
+    if n <= 4096:
+        conv = np.convolve(x, diag)
+    else:
+        m = n + diag.size - 1               # full convolution length
+        nfft = 1 << (m - 1).bit_length()
+        conv = np.fft.irfft(np.fft.rfft(x, nfft) * np.fft.rfft(diag, nfft),
+                            nfft)[:m]
+        conv = np.rint(conv).astype(np.int64)
+
+    y = (conv[n - 1:n - 1 + out_len] & 1).astype(int)
+    return y.tolist()
 
 
 class PAMsgType(Enum):

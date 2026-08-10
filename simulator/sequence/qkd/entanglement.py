@@ -324,7 +324,6 @@ class BaseEntanglementQKD(StackProtocol):
         latency (float): time to the first key [s].
         metrics (dict): protocol metrics of the last train
             (qber / chsh_S / sifted_len ...).
-        sampled_qbers (list[float]): BBM92 public-sample QBER per train.
         chsh_values (list[float]): E91 CHSH parameter per train.
     """
 
@@ -376,7 +375,6 @@ class BaseEntanglementQKD(StackProtocol):
         # ---- derived diagnostics ---------------------------------------
         self.num_rounds: int = 0
         self.num_trains: int = 0
-        self.sampled_qbers: list = []
         self.chsh_values: list = []
 
     def init(self):

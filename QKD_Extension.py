@@ -213,9 +213,16 @@ ENTANGLEMENT_PROTOCOLS = [p for p, c in PROTOCOL_REGISTRY.items()
 #     sifted key, compare it and DISCARD it (parameter estimation of the
 #     post-processing stack). Publishing both lets the campaign quantify
 #     how well the estimator tracks the true error rate.
+# Throughput likewise comes in two flavours:
+#   * Throughputs      -- historical definition: SIFTED-key bits per
+#     second, measured by the sifting layer (kept for continuity with
+#     the phase-1 results);
+#   * Throughput_final -- NET SECRET bits per second: l_net over the wall
+#     time between consecutive authenticated key deliveries.
 _METRIC_COLS = [
     ("R_sk", "skr"), ("QBER_total", "qber_total"), ("QBER_est", "qber_est"),
     ("Throughputs", "throughputs"),
+    ("Throughput_final", "throughputs_final"),
     ("Latency", "latency"), ("Loss", "loss"), ("R_s", "rs"),
 ]
 _VIS_COL = ("Visibility", "visibility")
@@ -223,7 +230,8 @@ _CHSH_COL = ("CHSH_S", "chsh_S")   # E91: same conditional-column pattern as _VI
 
 # Metrics with one independent sample per generated key: they are exported
 # as mean + "_std" (sample standard deviation) + "_sem" (standard error).
-_SAMPLED_METRIC_KEYS = {"skr", "qber_total", "qber_est", "throughputs", "rs",
+_SAMPLED_METRIC_KEYS = {"skr", "qber_total", "qber_est", "throughputs",
+                        "throughputs_final", "rs",
                         _VIS_COL[1], _CHSH_COL[1]}
 # Loss is deterministic for a given point and `latency` is measured once per
 # run (first key only), so neither carries an error bar.
@@ -235,7 +243,7 @@ _SAMPLED_METRIC_KEYS = {"skr", "qber_total", "qber_est", "throughputs", "rs",
 # (25), and varied even with key_num = n_replicas = 1. The key count of a
 # point is now taken from this set only.
 _PER_KEY_METRIC_KEYS = {"skr", "qber_total", "qber_est", "throughputs",
-                        "rs", _VIS_COL[1]}
+                        "throughputs_final", "rs", _VIS_COL[1]}
 
 #: Number of keys that actually entered the statistics of a point.
 _NKEYS_COL = ("N_keys", "n_keys")
@@ -423,10 +431,11 @@ def _empty_metrics(protocol):
         lists so that the statistics collapse to NaN instead of failing.
     """
     return dict(qber_total=list(protocol.error_rates), qber_est=[],
-                throughputs=0.0,
+                throughputs=0.0, throughputs_final=0.0,
                 latency=protocol.latency, skr=0.0, rs=0.0,
                 skr_samples=[], rs_samples=[],
-                throughput_samples=list(protocol.throughputs))
+                throughput_samples=list(protocol.throughputs),
+                throughput_final_samples=[])
 
 
 def _collect_metrics(stack, f_ec=1.0):
@@ -444,8 +453,12 @@ def _collect_metrics(stack, f_ec=1.0):
     The denominator (``send_bits_length``) is the number of qubits emitted
     per train, so R_s and R_sk stay in bits per qubit sent for BOTH
     protocol families and remain directly comparable. Latency is now the
-    time to the FIRST AUTHENTICATED key; throughput keeps its historical
-    definition (sifted-key throughput of the sifting layer).
+    time to the FIRST AUTHENTICATED key. Throughput keeps its historical
+    definition (sifted-key throughput of the sifting layer) and is
+    complemented by ``throughputs_final``, the net secret bits per second
+    measured by the authentication layer. Without the stack
+    (``postprocessing=False``) R_sk is NOT computed (published as NaN),
+    by project decision.
 
     Args:
         stack (list): Alice's ``protocol_stack`` (layer 0 = sifting; layer
@@ -467,19 +480,22 @@ def _collect_metrics(stack, f_ec=1.0):
     auth = stack[4] if len(stack) > 4 else None
 
     if auth is None or ec is None:
-        # Fallback (stack disabled): historical asymptotic estimate.
-        rs_list, skr_list = [], []
-        for i, e in enumerate(qber_total):
-            rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
-            skr_list.append(max(0.0, rs * (1 - f_ec * binary_entropy(e)
-                                           - binary_entropy(e))))
-            rs_list.append(rs)
+        # Fallback (postprocessing=False, sifting-only stack). By project
+        # decision, R_sk is NOT computed in this mode -- the asymptotic
+        # estimate of the previous phase was removed, and the secret key
+        # rate only exists as a MEASURED quantity at the output of the
+        # authentication layer. The column is published as NaN so that no
+        # plot or aggregate can mistake it for a measurement.
+        rs_list = [protocol.sifted_bits_length[i] / protocol.send_bits_length
+                   for i in range(len(qber_total))]
         return dict(qber_total=qber_total, qber_est=[],
                     throughputs=_safe_mean(protocol.throughputs, 0.0),
+                    throughputs_final=float("nan"),
                     latency=protocol.latency,
-                    skr=float(np.mean(skr_list)), rs=float(np.mean(rs_list)),
-                    skr_samples=skr_list, rs_samples=rs_list,
-                    throughput_samples=list(protocol.throughputs))
+                    skr=float("nan"), rs=float(np.mean(rs_list)),
+                    skr_samples=[], rs_samples=rs_list,
+                    throughput_samples=list(protocol.throughputs),
+                    throughput_final_samples=[])
 
     # Post-processing path: align the per-key lists to the keys that made
     # it through the WHOLE pipeline (keys still in flight when the
@@ -488,6 +504,7 @@ def _collect_metrics(stack, f_ec=1.0):
                  len(ec.qber_est_list))
     qber_total = qber_total[:n_done]
     qber_est = list(ec.qber_est_list[:n_done])
+    thr_final = list(auth.throughputs_final[:n_done])
 
     rs_list, skr_list = [], []
     for i in range(n_done):
@@ -506,11 +523,13 @@ def _collect_metrics(stack, f_ec=1.0):
     latency = auth.latency if auth.latency > 0 else protocol.latency
     return dict(qber_total=qber_total, qber_est=qber_est,
                 throughputs=_safe_mean(protocol.throughputs, 0.0),
+                throughputs_final=_safe_mean(thr_final, 0.0),
                 latency=latency,
                 skr=float(np.mean(skr_list)) if skr_list else 0.0,
                 rs=float(np.mean(rs_list)) if rs_list else 0.0,
                 skr_samples=skr_list, rs_samples=rs_list,
-                throughput_samples=list(protocol.throughputs))
+                throughput_samples=list(protocol.throughputs),
+                throughput_final_samples=thr_final)
 
 
 def resolve_entanglement_arms(distance, charlie_position=0.5,
@@ -1049,7 +1068,7 @@ def _run_entanglement_qkd(
     (qber/throughputs/latency/skr/loss/rs and the per-key ``*_samples``
     lists [+ chsh_S for E91]) so that _worker/_collect_results/_unpack work
     unchanged, plus the raw entanglement diagnostics (num_rounds,
-    num_trains, sampled_qber, ...). ``seed`` is the run seed: Alice, Bob,
+    num_trains, ...). ``seed`` is the run seed: Alice, Bob,
     Charlie and Eve each get an independent substream from
     :func:`derive_seed`. With ``loss_parameters=None`` and ``loss=None``
     both arms fall back to the attenuation formula, which is what makes the
@@ -1103,6 +1122,7 @@ def _run_entanglement_qkd(
                        dark_count_rate=dark_count_rate,
                        background_mu=n_B,
                        slot_frequency=frequency,
+                       count_rate=det0.get("count_rate"),
                        anti_correlated=anti)
     alice = MeasuringNode("Alice", tl, "alice", rounds_per_train,
                           seed=derive_seed(seed, "ent_alice"), **node_kwargs)
@@ -1233,7 +1253,6 @@ def _run_entanglement_qkd(
         detected_alice=alice.detected_total, detected_bob=bob.detected_total,
         noise_counts=(alice.noise_counts, bob.noise_counts),
         eve_intercepted=(eve.intercepted_count if eve else 0),
-        sampled_qber=_safe_mean(alice_proto.sampled_qbers),
         key_error_rate=mean_qber,
         secure_fraction=secure_fraction, f_ec=f_ec,
         # unit-explicit extras (not part of the shared CSV contract)
@@ -1246,14 +1265,12 @@ def _run_entanglement_qkd(
     )
     if cfg.get("needs_chsh"):
         # Per-train Bell parameters computed by Alice: the list feeds the
-        # error bar, its mean is the value published in the CSV.
+        # error bar, its mean is the value published in the CSV. The Bell
+        # gate itself lives in the entropy-estimation layer, which bounds
+        # Eve's information by the CHSH parameter (chi(S), Acin et al.
+        # 2007) and yields l = 0 whenever |S| <= 2 -- so R_sk is already
+        # measured as zero without any runner-level override.
         result["chsh_S"] = list(alice_proto.chsh_values)
-        S = _safe_mean(alice_proto.chsh_values)
-        # The E91 security witness is the Bell violation, not the QBER
-        # alone: without this guard the CSV would publish R_sk > 0 at |S| <= 2.
-        if enforce_bell_violation and (np.isnan(S) or abs(S) <= 2.0):
-            result["skr"] = 0.0
-            result["skr_samples"] = [0.0] * len(result.get("skr_samples", []))
     return result
 
 # Thin wrappers, symmetric with simulation_BB84 / simulation_B92 / ...:
@@ -1447,7 +1464,8 @@ def _sampled_keys_of(proto):
     Returns:
         list[str]: result-dict keys reduced by :func:`replicate_statistics`.
     """
-    keys = ["skr", "qber_total", "qber_est", "throughputs", "rs"]
+    keys = ["skr", "qber_total", "qber_est", "throughputs",
+            "throughputs_final", "rs"]
     if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
         keys.append(_VIS_COL[1])
     if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
@@ -1480,7 +1498,8 @@ def _worker(task):
                "qber_total": res.get("qber_total"),
                "qber_est": res.get("qber_est"),
                "rs": res.get("rs_samples"),
-               "throughputs": res.get("throughput_samples")}
+               "throughputs": res.get("throughput_samples"),
+               "throughputs_final": res.get("throughput_final_samples")}
 
     if "visibility" in res:
         samples[_VIS_COL[1]] = res["visibility"]

@@ -42,7 +42,8 @@ where
       visibility V (Stucki et al., APL 87, 194108 (2005)):
           I_E = mu*(1 - t) + (1 - V) * (1 + e^{-mu t}) / (2 e^{-mu t}),
       with t the channel transmission and mu the mean photon number;
-    - E91 (mode "e91"): the security verdict is the CHSH violation. If
+    - E91 (mode "e91"): Eve's information is bounded by the CHSH
+      parameter, I_E = chi(S) (see :meth:`_eve_information`). If
       |S| <= 2 the key is ABORTED (l = 0); otherwise the standard
       entanglement-based bound I_E = H2(Q_bound) is applied (the
       device-independent bound based on S is listed as an open decision in
@@ -137,7 +138,28 @@ class EntropyEstimation(StackProtocol):
                          / (2.0 * k * k * n))
 
     def _eve_information(self, q_bound: float, key_index: int) -> float:
-        """Protocol-specific bound I_E on Eve's information per key bit."""
+        """Protocol-specific bound I_E on Eve's information per key bit.
+
+        * mode "h2" (BB84/B92/BBM92): the standard bound
+          I_E = h2(Q_bound);
+        * mode "cow": the monitoring-line visibility bound (photon-number
+          splitting fraction + interference term);
+        * mode "e91": the device-independent-style CHSH bound of the
+          Devetak-Winter rate for CHSH-based protocols (Acin et al., PRL
+          98, 230501, 2007): Eve's information is limited by the Bell
+          parameter alone,
+
+              I_E = chi(S) = h2((1 + sqrt((S/2)^2 - 1)) / 2),
+
+          with S the mean CHSH value of the run so far. The bound
+          penalises weak violations even at low QBER (chi -> 1 as
+          |S| -> 2, so l -> 0 continuously) and vanishes at the Tsirelson
+          limit |S| = 2*sqrt(2). The QBER still enters the secret length
+          through the error-correction leakage, reproducing
+          r = 1 - h2(Q) - chi(S). No finite-size correction is applied to
+          S itself (the Serfling penalty covers the QBER estimate only);
+          this simplification is documented in the project report.
+        """
         if self.mode == "cow":
             sift = self._sifting()
             vis = getattr(sift, "visibility", None)
@@ -151,17 +173,29 @@ class EntropyEstimation(StackProtocol):
             return (mu * (1.0 - t)
                     + (1.0 - v) * (1.0 + math.exp(-mu * t))
                     / (2.0 * math.exp(-mu * t)))
-        # "h2" and "e91" (post Bell check) use the standard BB84 bound
+        if self.mode == "e91":
+            s_mean = self._chsh_mean()
+            s_abs = abs(s_mean) if s_mean == s_mean else 0.0
+            if s_abs <= 2.0:
+                return 1.0              # no violation: nothing is secret
+            ratio = min(s_abs / 2.0, math.sqrt(2.0))
+            return binary_entropy((1.0 + math.sqrt(ratio * ratio - 1.0))
+                                  / 2.0)
+        # "h2": the standard BB84 bound
         return binary_entropy(q_bound)
 
-    def _bell_check_passed(self) -> bool:
-        """E91 verdict: |S| > 2 over the CHSH values accumulated so far."""
+    def _chsh_mean(self) -> float:
+        """Mean CHSH parameter over the values accumulated so far."""
         sift = self._sifting()
         values = [s for s in getattr(sift, "chsh_values", []) if s == s]
         if not values:
-            return False
-        s_mean = sum(values) / len(values)
-        return abs(s_mean) > 2.0
+            return float("nan")
+        return sum(values) / len(values)
+
+    def _bell_check_passed(self) -> bool:
+        """E91 verdict: |S| > 2 over the CHSH values accumulated so far."""
+        s_mean = self._chsh_mean()
+        return s_mean == s_mean and abs(s_mean) > 2.0
 
     def secret_length(self, n: int, k: int, qber_est: float,
                       leak_ec: int, key_index: int) -> tuple:

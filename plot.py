@@ -194,14 +194,16 @@ SWEEP_SHORT = {
 # (panel title, Y unit, scale factor applied to the raw value).  ``CHSH_S`` is
 # the E91 Bell parameter (kept unscaled); like ``Visibility`` it only exists for
 # some protocols, so panels/columns are created only when the data is present.
-METRIC_ORDER = ["R_sk", "QBER", "QBER_est", "R_s", "Throughputs", "Latency",
-                "Loss", "Visibility", "CHSH_S"]
+METRIC_ORDER = ["R_sk", "QBER", "QBER_est", "R_s", "Throughputs",
+                "Throughput_final", "Latency", "Loss", "Visibility",
+                "CHSH_S"]
 METRIC_INFO = {
     "R_sk":        ("R_sk",            "bits por qubit", 1.0),
     "QBER":        ("QBER total",      "%",              100.0),
     "QBER_est":    ("QBER estimada",   "%",              100.0),
     "R_s":         ("R_s",             "%",              100.0),
     "Throughputs": ("Throughput",      "bits/s",         1.0),
+    "Throughput_final": ("Throughput final (chave secreta)", "bits/s", 1.0),
     "Latency":     ("Latência",        "s",              1.0),
     "Loss":        ("Perda do canal",  "fração",         1.0),
     "Visibility":  ("Visibilidade",    "",               1.0),

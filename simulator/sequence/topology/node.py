@@ -868,11 +868,11 @@ class MeasuringNode(Node):
     ``round_index`` coincidence tag.
 
     ``apply_noise_counts()`` must be called after the quantum window of each
-    train: every round WITHOUT a true detection gets a noise count (random
-    outcome) with probability ``noise_prob_per_round`` = (S_dark + S_back) *
-    gate. This is how accidental coincidences (Kržič Eq. 2.5) arise in the
-    round-tag approximation, so daylight background produces QBER > 0
-    without any Eve.
+    train: it applies dark counts and sky background per round and per
+    detector, then enforces the detector dead time -- the same receiver
+    contract of the prepare-and-measure family. This is how accidental
+    coincidences (Kržič Eq. 2.5) arise in the round-tag approximation, so
+    daylight background produces QBER > 0 without any Eve.
 
     Emission is organised in TRAINS (the entanglement analog of the BB84
     pulse train): :meth:`start_train` re-arms the node before each one, so
@@ -898,11 +898,11 @@ class MeasuringNode(Node):
                  num_rounds: int = 0, qkdtype: int = 3, stack_size: int = 1,
                  detector_efficiency: float = 0.9, seed=None,
                  polarization_error_prob: float = 0.0,
-                 noise_prob_per_round: float = 0.0,
                  anti_correlated: bool = True,
                  dark_count_rate: float = 0.0,
                  background_mu: float = 0.0,
-                 slot_frequency: float = None):
+                 slot_frequency: float = None,
+                 count_rate: float = None):
         """Constructor for the measuring node class.
 
         Args:
@@ -912,17 +912,23 @@ class MeasuringNode(Node):
             num_rounds (int): rounds of the first emission train; every
                 subsequent train re-arms the node via :meth:`start_train`.
             qkdtype (int): 3 (BBM92 QKD protocol), 4 (E91 QKD protocol).
-            stack_size (int): 0 = no protocol, >=1 = sifting protocol at
-                layer 0 (cascade/error-correction not yet supported for
-                the entanglement-based stack).
+            stack_size (int): 0 = no protocol; 1 = sifting only; 2-5 add
+                the classical post-processing layers (error correction,
+                entropy estimation, privacy amplification,
+                authentication), as in :class:`QKDNode`.
             detector_efficiency (float): single-photon detector efficiency.
             seed (int): seed for the random number generator.
             polarization_error_prob (float): per-photon depolarization
                 probability (phenomenological channel error, contributes
                 (1-f)/2 to the QBER).
-            noise_prob_per_round (float): probability that an undetected
-                round is filled by a dark/background count.
             anti_correlated (bool): True for the |Psi-> source (default).
+            dark_count_rate (float): dark-count rate of EACH detector [Hz].
+            background_mu (float): mean background photons per slot (n_B).
+            slot_frequency (float): emission rate [Hz] mapping rounds to
+                slot periods of 1/slot_frequency seconds.
+            count_rate (float): maximum count rate of EACH detector [Hz];
+                the reciprocal is the detector dead time (see
+                :meth:`apply_noise_counts`). None disables the dead time.
         """
         super().__init__(name, timeline, seed)
         assert role in ("alice", "bob"), \
@@ -931,11 +937,9 @@ class MeasuringNode(Node):
         self.num_rounds = num_rounds
         self.detector_efficiency = detector_efficiency
         self.polarization_error_prob = polarization_error_prob
-        #: DEPRECATED single-probability model, kept only for backwards
-        #: compatibility; superseded by the per-detector model below.
-        self.noise_prob_per_round = noise_prob_per_round
         self.noise_counts = 0
         self.discarded_double_clicks = 0
+        self.discarded_dead_time = 0
 
         # ── per-detector noise model, EQUIVALENT to the prepare-and-measure
         # receiver (Detector Poisson dark counts + ThermalNoiseSource):
@@ -958,6 +962,7 @@ class MeasuringNode(Node):
         self.dark_count_rate = float(dark_count_rate)
         self.background_mu = float(background_mu)
         self.slot_frequency = slot_frequency
+        self.count_rate = count_rate
 
         # protocol selection (extends the QKDNode qkdtype numbering)
         if qkdtype == 3:
@@ -1056,7 +1061,7 @@ class MeasuringNode(Node):
         self.detected_total += 1
 
     def apply_noise_counts(self) -> None:
-        """Apply dark counts and sky background per round, per detector.
+        """Apply dark counts, sky background and dead time, per detector.
 
         EQUIVALENT to the prepare-and-measure receiver (see the constructor
         note): every round has two detectors ("0" and "1" behind the
@@ -1067,8 +1072,27 @@ class MeasuringNode(Node):
                                 + detector_efficiency*background_mu/2)),
 
         i.e. dark counts anywhere in the slot period plus the (efficiency-
-        thinned, 50/50-routed) background photons of the slot. The
-        resulting round follows the same rules as ``QKDNode.get_bits``:
+        thinned, 50/50-routed) background photons of the slot.
+
+        DETECTOR DEAD TIME. Each detector is non-paralyzable with dead
+        time tau = 1/count_rate, mirroring ``Detector.record_detection``
+        of the prepare-and-measure receivers (a detection is dropped when
+        it arrives within tau of the previous RECORDED detection on the
+        same detector; dropped clicks do not extend the dead period).
+        Rounds are slots of duration 1/slot_frequency, so a click in
+        round i suppresses clicks of the same detector in rounds j with
+        (j - i) < slot_frequency/count_rate. All clicks -- true
+        detections and noise counts alike -- share the same dead-time
+        bookkeeping, in round order, which is what makes the entanglement
+        receivers publication-comparable with the prepare-and-measure
+        family at high count rates (implements decision #6 of the
+        2026-08 code review). With the campaign base parameters
+        (slot_frequency = 8 MHz, count_rate = 20 MHz) the dead window is
+        shorter than one slot and the correction is inactive, exactly as
+        in the prepare-and-measure receivers.
+
+        After the dead time, the surviving clicks of the round follow the
+        same rules as ``QKDNode.get_bits``:
 
         * no real detection, exactly ONE noise click -> the round records
           the outcome of the clicking detector (a noise count);
@@ -1076,52 +1100,67 @@ class MeasuringNode(Node):
           (discarded, as ``bits[index] = -1``);
         * real detection + noise click on the SAME detector -> unchanged;
         * real detection + noise click on the OTHER detector -> double
-          click, the round is DISCARDED (record removed).
-
-        The legacy single-probability model (``noise_prob_per_round``) is
-        applied only when the per-detector parameters are absent, so old
-        call sites keep working.
+          click, the round is DISCARDED (record removed);
+        * real detection suppressed by the dead time -> the round is
+          DISCARDED (the photon arrived while the detector was dead).
         """
-        # ── legacy fallback (deprecated) ─────────────────────────────────
-        if (self.dark_count_rate <= 0.0 and self.background_mu <= 0.0):
-            if self.noise_prob_per_round <= 0.0:
-                return
-            for i in range(self.num_rounds):
-                if i in self.records:
-                    continue
-                if self.generator.random() < self.noise_prob_per_round:
-                    self.records[i] = (int(self.settings[i]),
-                                       int(self.generator.integers(0, 2)))
-                    self.noise_counts += 1
+        if self.num_rounds <= 0:
             return
-
-        # ── prepare-and-measure-equivalent per-detector model ────────────
         slot_f = self.slot_frequency
         mu_dark = (self.dark_count_rate / slot_f) if slot_f else 0.0
         mu_back = self.detector_efficiency * self.background_mu / 2.0
         p_click = 1.0 - np.exp(-(mu_dark + mu_back))
-        if p_click <= 0.0 or self.num_rounds <= 0:
-            return
 
-        clicks = self.generator.random((self.num_rounds, 2)) < p_click
+        # dead time expressed in rounds (non-integer allowed): a click in
+        # round i blocks rounds j of the SAME detector with j-i < dead_rounds
+        dead_rounds = 0.0
+        if self.count_rate and slot_f:
+            dead_rounds = slot_f / self.count_rate
+
+        if p_click <= 0.0 and dead_rounds <= 1.0:
+            return   # no noise and dead window shorter than one slot
+
+        clicks = (self.generator.random((self.num_rounds, 2)) < p_click
+                  if p_click > 0.0 else None)
+        # last round in which each detector RECORDED a click
+        last_click = [-np.inf, -np.inf]
+
         for i in range(self.num_rounds):
-            c0, c1 = bool(clicks[i, 0]), bool(clicks[i, 1])
-            if not (c0 or c1):
-                continue
             real = self.records.get(i)
+            c = [bool(clicks[i, 0]), bool(clicks[i, 1])] if clicks is not None \
+                else [False, False]
+            if real is not None:
+                c[real[1]] = True           # the true detection is a click
+            if not (c[0] or c[1]):
+                continue
+
+            # non-paralyzable dead time, per detector, in round order
+            surv = [False, False]
+            for d in (0, 1):
+                if not c[d]:
+                    continue
+                if i - last_click[d] < dead_rounds:
+                    continue                # detector still dead: dropped
+                surv[d] = True
+                last_click[d] = i
+
             if real is not None:
                 bit = real[1]
-                other_clicked = c1 if bit == 0 else c0
-                if other_clicked:           # double click -> discard round
+                if not surv[bit]:           # photon fell in the dead window
+                    del self.records[i]
+                    self.discarded_dead_time += 1
+                elif surv[1 - bit]:         # double click -> discard round
                     del self.records[i]
                     self.discarded_double_clicks += 1
                 continue
-            if c0 and c1:                   # noise double click -> invalid
+
+            if surv[0] and surv[1]:         # noise double click -> invalid
                 self.discarded_double_clicks += 1
                 continue
-            outcome = 0 if c0 else 1
-            self.records[i] = (int(self.settings[i]), outcome)
-            self.noise_counts += 1
+            if surv[0] or surv[1]:
+                outcome = 0 if surv[0] else 1
+                self.records[i] = (int(self.settings[i]), outcome)
+                self.noise_counts += 1
 
 
 class EveNode(Node):

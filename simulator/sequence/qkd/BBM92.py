@@ -85,7 +85,6 @@ class BBM92(BaseEntanglementQKD):
     Sifting keeps same-basis rounds; a public sample estimates the QBER and
     is discarded from the key on both sides. Metrics (on Alice's side after
     each train): ``sifted_len``, ``sample_len``, ``qber``; the per-train
-    sample QBER is also accumulated in ``sampled_qbers`` as a diagnostic.
 
     Key generation is keysize-oriented and lives in the base class: the
     sifted bits of successive trains accumulate until ``keysize`` bits are

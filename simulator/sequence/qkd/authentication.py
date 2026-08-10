@@ -104,6 +104,10 @@ class Authentication(StackProtocol):
             (Alice; the campaign metric R_sk = l_net / qubits sent).
         auth_ok_list (list[bool]): per-key tag verification verdict.
         key_times (list[int]): simulation time [ps] each key was accepted.
+        throughputs_final (list[float]): per-key NET secret throughput
+            [bits/s]: l_net divided by the wall time between consecutive
+            authenticated key deliveries (first key: since t = 0), the
+            final-key analog of the sifting-layer throughput.
         latency (float): time to the FIRST authenticated key [s].
     """
 
@@ -120,7 +124,9 @@ class Authentication(StackProtocol):
         self.final_key_lengths: list = []
         self.auth_ok_list: list = []
         self.key_times: list = []
+        self.throughputs_final: list = []
         self.latency: float = 0.0
+        self._last_key_time: int = 0    # ps; previous delivery (or start)
 
         self._alice_buffer: dict = {}   # key_index -> (final_key, l)
         self._alice_pending: dict = {}  # key_index -> AUTH_TAG message
@@ -175,6 +181,10 @@ class Authentication(StackProtocol):
         self.final_key_lengths.append(l_net)
         self.auth_ok_list.append(auth_ok)
         self.key_times.append(now)
+        dt_ps = now - self._last_key_time
+        self.throughputs_final.append(l_net * 1e12 / dt_ps if dt_ps > 0
+                                      else 0.0)
+        self._last_key_time = now
         if self.latency == 0.0 and l_net >= 0:
             self.latency = now * 1e-12
 
