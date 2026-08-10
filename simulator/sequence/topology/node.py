@@ -39,6 +39,10 @@ from ..qkd.BBM92 import BBM92
 from ..qkd.E91 import E91
 from ..qkd.entanglement import BellPairSource, basis_from_angle
 from ..qkd.cascade import Cascade
+from ..qkd.error_correction import ErrorCorrection
+from ..qkd.entropy_estimation import EntropyEstimation
+from ..qkd.privacy_amp import PrivacyAmplification
+from ..qkd.authentication import Authentication
 from ..entanglement_management.generation import EntanglementGenerationB
 from ..resource_management.resource_manager import ResourceManager
 from ..network_management.network_manager import NewNetworkManager, NetworkManager
@@ -488,10 +492,12 @@ class QKDNode(Node):
     (https://arxiv.org/pdf/quant-ph/0412029.pdf page 24).
     The protocol stack is:
 
-    4. Authentication <= No implementation
-    3. Privacy Amplification  <= No implementation
-    2. Entropy Estimation <= No implementation
-    1. Error Correction <= implemented by cascade
+    4. Authentication <= implemented by sequence.qkd.authentication
+    3. Privacy Amplification <= implemented by sequence.qkd.privacy_amp
+    2. Entropy Estimation <= implemented by sequence.qkd.entropy_estimation
+    1. Error Correction <= implemented by sequence.qkd.error_correction
+       (parameter estimation + reconciliation; the legacy cascade module
+       is kept in the tree but is no longer wired into the stack)
     0. Sifting <= implemented by BB84, B92 and COW
 
     Additionally, the `components` dictionary contains the following hardware:
@@ -582,12 +588,22 @@ class QKDNode(Node):
                 self.protocol_stack[0] = COW(self, name + ".COW", ls_name, qsd_name)
                 self.protocols.append(self.protocol_stack[0])
 
-        if stack_size > 1:
-            # Create cascade protocol
-            self.protocol_stack[1] = Cascade(self, name + ".cascade")
-            self.protocols.append(self.protocol_stack[1])
-            self.protocol_stack[0].upper_protocols.append(self.protocol_stack[1])
-            self.protocol_stack[1].lower_protocols.append(self.protocol_stack[0])
+        # Classical post-processing stack (parameter estimation + error
+        # correction, entropy estimation, privacy amplification and
+        # authentication). Layers are linked bottom-up; peers are paired by
+        # sequence.qkd.error_correction.pair_postprocessing_stacks.
+        _pp_layers = [(2, ErrorCorrection, ".error_correction"),
+                      (3, EntropyEstimation, ".entropy_estimation"),
+                      (4, PrivacyAmplification, ".privacy_amp"),
+                      (5, Authentication, ".authentication")]
+        for min_size, proto_cls, suffix in _pp_layers:
+            if stack_size >= min_size:
+                layer = min_size - 1
+                self.protocol_stack[layer] = proto_cls(self, name + suffix)
+                self.protocols.append(self.protocol_stack[layer])
+                below = self.protocol_stack[layer - 1]
+                below.upper_protocols.append(self.protocol_stack[layer])
+                self.protocol_stack[layer].lower_protocols.append(below)
 
     def init(self) -> None:
         super().init()
@@ -883,7 +899,10 @@ class MeasuringNode(Node):
                  detector_efficiency: float = 0.9, seed=None,
                  polarization_error_prob: float = 0.0,
                  noise_prob_per_round: float = 0.0,
-                 anti_correlated: bool = True):
+                 anti_correlated: bool = True,
+                 dark_count_rate: float = 0.0,
+                 background_mu: float = 0.0,
+                 slot_frequency: float = None):
         """Constructor for the measuring node class.
 
         Args:
@@ -912,8 +931,33 @@ class MeasuringNode(Node):
         self.num_rounds = num_rounds
         self.detector_efficiency = detector_efficiency
         self.polarization_error_prob = polarization_error_prob
+        #: DEPRECATED single-probability model, kept only for backwards
+        #: compatibility; superseded by the per-detector model below.
         self.noise_prob_per_round = noise_prob_per_round
         self.noise_counts = 0
+        self.discarded_double_clicks = 0
+
+        # ── per-detector noise model, EQUIVALENT to the prepare-and-measure
+        # receiver (Detector Poisson dark counts + ThermalNoiseSource):
+        #   * dark counts fire at `dark_count_rate` [Hz] on EACH of the two
+        #     detectors, and a dark count anywhere inside the slot period
+        #     1/slot_frequency registers on that round's bit — the same
+        #     time->index mapping of QKDNode.get_bits. Per-round mean per
+        #     detector: dark_count_rate / slot_frequency (NOT multiplied by
+        #     the detector efficiency, exactly like Detector.add_dark_count
+        #     bypasses Detector.get);
+        #   * background photons arrive with mean `background_mu` per slot
+        #     (n_B, gated — the ThermalNoiseSource convention), are routed
+        #     by the analyser to either detector with probability 1/2
+        #     (unpolarized light) and are detected with the detector
+        #     efficiency. Per-round mean per detector:
+        #     detector_efficiency * background_mu / 2;
+        #   * double clicks (both detectors in the same round, real+noise
+        #     or noise+noise) INVALIDATE the round, as get_bits marks
+        #     bits[index] = -1.
+        self.dark_count_rate = float(dark_count_rate)
+        self.background_mu = float(background_mu)
+        self.slot_frequency = slot_frequency
 
         # protocol selection (extends the QKDNode qkdtype numbering)
         if qkdtype == 3:
@@ -944,6 +988,21 @@ class MeasuringNode(Node):
             self.protocol_stack[0] = proto_cls(
                 self, name + "." + label, anti_correlated=anti_correlated)
             self.protocols.append(self.protocol_stack[0])
+
+        # Classical post-processing stack — SAME layering as QKDNode, so
+        # both protocol families share one post-processing implementation.
+        _pp_layers = [(2, ErrorCorrection, ".error_correction"),
+                      (3, EntropyEstimation, ".entropy_estimation"),
+                      (4, PrivacyAmplification, ".privacy_amp"),
+                      (5, Authentication, ".authentication")]
+        for min_size, pp_cls, suffix in _pp_layers:
+            if stack_size >= min_size:
+                layer = min_size - 1
+                self.protocol_stack[layer] = pp_cls(self, name + suffix)
+                self.protocols.append(self.protocol_stack[layer])
+                below = self.protocol_stack[layer - 1]
+                below.upper_protocols.append(self.protocol_stack[layer])
+                self.protocol_stack[layer].lower_protocols.append(below)
 
     def init(self) -> None:
         super().init()
@@ -997,23 +1056,72 @@ class MeasuringNode(Node):
         self.detected_total += 1
 
     def apply_noise_counts(self) -> None:
-        """Fill undetected rounds with dark/background noise counts.
+        """Apply dark counts and sky background per round, per detector.
 
-        Approximation: noise only occupies rounds without a true detection
-        (the second-order effect of a noise count "stealing" the window of
-        a real photon is neglected). The outcome is uniform because thermal
-        background light is unpolarized and dark counts fall on either
-        detector.
+        EQUIVALENT to the prepare-and-measure receiver (see the constructor
+        note): every round has two detectors ("0" and "1" behind the
+        analyser of the pre-drawn setting), and each detector clicks
+        independently with probability
+
+            p_click = 1 - exp(-(dark_count_rate/slot_frequency
+                                + detector_efficiency*background_mu/2)),
+
+        i.e. dark counts anywhere in the slot period plus the (efficiency-
+        thinned, 50/50-routed) background photons of the slot. The
+        resulting round follows the same rules as ``QKDNode.get_bits``:
+
+        * no real detection, exactly ONE noise click -> the round records
+          the outcome of the clicking detector (a noise count);
+        * no real detection, BOTH detectors click -> invalid round
+          (discarded, as ``bits[index] = -1``);
+        * real detection + noise click on the SAME detector -> unchanged;
+        * real detection + noise click on the OTHER detector -> double
+          click, the round is DISCARDED (record removed).
+
+        The legacy single-probability model (``noise_prob_per_round``) is
+        applied only when the per-detector parameters are absent, so old
+        call sites keep working.
         """
-        if self.noise_prob_per_round <= 0.0:
+        # ── legacy fallback (deprecated) ─────────────────────────────────
+        if (self.dark_count_rate <= 0.0 and self.background_mu <= 0.0):
+            if self.noise_prob_per_round <= 0.0:
+                return
+            for i in range(self.num_rounds):
+                if i in self.records:
+                    continue
+                if self.generator.random() < self.noise_prob_per_round:
+                    self.records[i] = (int(self.settings[i]),
+                                       int(self.generator.integers(0, 2)))
+                    self.noise_counts += 1
             return
+
+        # ── prepare-and-measure-equivalent per-detector model ────────────
+        slot_f = self.slot_frequency
+        mu_dark = (self.dark_count_rate / slot_f) if slot_f else 0.0
+        mu_back = self.detector_efficiency * self.background_mu / 2.0
+        p_click = 1.0 - np.exp(-(mu_dark + mu_back))
+        if p_click <= 0.0 or self.num_rounds <= 0:
+            return
+
+        clicks = self.generator.random((self.num_rounds, 2)) < p_click
         for i in range(self.num_rounds):
-            if i in self.records:
+            c0, c1 = bool(clicks[i, 0]), bool(clicks[i, 1])
+            if not (c0 or c1):
                 continue
-            if self.generator.random() < self.noise_prob_per_round:
-                self.records[i] = (int(self.settings[i]),
-                                   int(self.generator.integers(0, 2)))
-                self.noise_counts += 1
+            real = self.records.get(i)
+            if real is not None:
+                bit = real[1]
+                other_clicked = c1 if bit == 0 else c0
+                if other_clicked:           # double click -> discard round
+                    del self.records[i]
+                    self.discarded_double_clicks += 1
+                continue
+            if c0 and c1:                   # noise double click -> invalid
+                self.discarded_double_clicks += 1
+                continue
+            outcome = 0 if c0 else 1
+            self.records[i] = (int(self.settings[i]), outcome)
+            self.noise_counts += 1
 
 
 class EveNode(Node):

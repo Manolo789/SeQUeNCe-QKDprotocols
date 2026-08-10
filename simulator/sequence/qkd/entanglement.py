@@ -87,7 +87,7 @@ from typing import TYPE_CHECKING
 from ..kernel.entity import Entity
 from ..kernel.event import Event
 from ..kernel.process import Process
-from ..protocol import Protocol
+from ..protocol import StackProtocol
 from ..message import Message
 from ..components.photon import Photon
 from ..utils.encoding import polarization
@@ -254,7 +254,7 @@ class BellPairSource(Entity):
 # Application: base class for entanglement-based QKD protocols
 # ===========================================================================
 
-class BaseEntanglementQKD(Protocol):
+class BaseEntanglementQKD(StackProtocol):
     """Classical layer common to BBM92 and E91 (keysize-oriented driver).
 
     Alice announces her bases and detected rounds (BASIS_ANNOUNCE). Bob
@@ -380,6 +380,10 @@ class BaseEntanglementQKD(Protocol):
         self.chsh_values: list = []
 
     def init(self):
+        pass
+
+    def pop(self, **kwargs):
+        """Downward stack interface (unused: sifting is the bottom layer)."""
         pass
 
     # ------------------------------------------------------------------
@@ -533,6 +537,12 @@ class BaseEntanglementQKD(Protocol):
         self.working = False
         if self.another is not None:
             self.another.working = False
+        # Without a post-processing stack there is nothing left to deliver:
+        # stop the timeline so noise chains do not keep replaying until the
+        # full horizon. With a stack, the authentication layer stops the
+        # timeline after the last key is delivered.
+        if self.role == 0 and not self.upper_protocols:
+            self.owner.timeline.stop()
 
     # ----- end of a train: accumulate and extract keys ------------------
     def _train_complete(self) -> None:
@@ -563,6 +573,11 @@ class BaseEntanglementQKD(Protocol):
                 self.sifted_bits_length.append(n_sifted)
                 self.set_key()
                 self.another.set_key()
+                # deliver the sifted key to the classical post-processing
+                # stack (parameter estimation -> EC -> EE -> PA -> auth),
+                # SAME convention as BB84/B92/COW
+                self._pop(info=self.key, length=keysize)
+                self.another._pop(info=self.another.key, length=keysize)
 
                 if self.latency == 0:
                     self.latency = elapsed * 1e-12

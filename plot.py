@@ -194,11 +194,12 @@ SWEEP_SHORT = {
 # (panel title, Y unit, scale factor applied to the raw value).  ``CHSH_S`` is
 # the E91 Bell parameter (kept unscaled); like ``Visibility`` it only exists for
 # some protocols, so panels/columns are created only when the data is present.
-METRIC_ORDER = ["R_sk", "QBER", "R_s", "Throughputs", "Latency", "Loss",
-                "Visibility", "CHSH_S"]
+METRIC_ORDER = ["R_sk", "QBER", "QBER_est", "R_s", "Throughputs", "Latency",
+                "Loss", "Visibility", "CHSH_S"]
 METRIC_INFO = {
     "R_sk":        ("R_sk",            "bits por qubit", 1.0),
-    "QBER":        ("QBER",            "%",              100.0),
+    "QBER":        ("QBER total",      "%",              100.0),
+    "QBER_est":    ("QBER estimada",   "%",              100.0),
     "R_s":         ("R_s",             "%",              100.0),
     "Throughputs": ("Throughput",      "bits/s",         1.0),
     "Latency":     ("Latência",        "s",              1.0),
@@ -314,9 +315,27 @@ def _skr_ylabel(protocols=None) -> str:
             "[bits por qubit enviado]")
 
 
+# Column aliases: the simulator now exports the exhaustive QBER as
+# "QBER_total" (and adds the operationally estimated "QBER_est"); old CSVs
+# still carry a single "QBER" column. Both generations are plottable.
+_METRIC_COLUMN_ALIASES = {"QBER": ("QBER", "QBER_total"),
+                          "QBER_std": ("QBER_std", "QBER_total_std"),
+                          "QBER_sem": ("QBER_sem", "QBER_total_sem")}
+
+
+def _resolve_column(df: pd.DataFrame, metric: str, proto: str,
+                    suffix: str, stat: str = "") -> str:
+    """First existing column name for ``metric`` among its aliases."""
+    for alias in _METRIC_COLUMN_ALIASES.get(metric, (metric,)):
+        col = f"{alias}{stat}-{proto}{suffix}"
+        if col in df.columns:
+            return col
+    return f"{metric}{stat}-{proto}{suffix}"
+
+
 def _series(df: pd.DataFrame, metric: str, proto: str, suffix: str):
     """Return column values, or None if the column is absent/all-empty."""
-    col = f"{metric}-{proto}{suffix}"
+    col = _resolve_column(df, metric, proto, suffix)
     if col not in df.columns:
         return None
     vals = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)

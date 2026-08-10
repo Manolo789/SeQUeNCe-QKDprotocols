@@ -59,6 +59,7 @@ from sequence.qkd.B92 import pair_b92_protocols
 from sequence.qkd.COW import pair_cow_protocols
 from sequence.qkd.BBM92 import pair_bbm92_protocols
 from sequence.qkd.E91 import pair_e91_protocols
+from sequence.qkd.error_correction import pair_postprocessing_stacks
 from sequence.topology.node import (QKDNode, EveNode,
     EntanglementSourceNode, MeasuringNode)
 from sequence.utils.encoding_cow import time_bin_cow
@@ -204,8 +205,17 @@ ENTANGLEMENT_PROTOCOLS = [p for p, c in PROTOCOL_REGISTRY.items()
                           if c.get("entanglement")]
 
 # Metric column names used in the output CSVs (label, dict-key).
+# QBER is now exported as TWO quantities:
+#   * QBER_total -- exhaustive XOR of Alice's and Bob's full sifted keys.
+#     A simulation-only observable (a real link cannot compare the keys).
+#   * QBER_est   -- the operational estimate of a real QKD link: Alice and
+#     Bob publicly reveal a random fraction f_bits_reveal_qber of the
+#     sifted key, compare it and DISCARD it (parameter estimation of the
+#     post-processing stack). Publishing both lets the campaign quantify
+#     how well the estimator tracks the true error rate.
 _METRIC_COLS = [
-    ("R_sk", "skr"), ("QBER", "qber"), ("Throughputs", "throughputs"),
+    ("R_sk", "skr"), ("QBER_total", "qber_total"), ("QBER_est", "qber_est"),
+    ("Throughputs", "throughputs"),
     ("Latency", "latency"), ("Loss", "loss"), ("R_s", "rs"),
 ]
 _VIS_COL = ("Visibility", "visibility")
@@ -213,10 +223,19 @@ _CHSH_COL = ("CHSH_S", "chsh_S")   # E91: same conditional-column pattern as _VI
 
 # Metrics with one independent sample per generated key: they are exported
 # as mean + "_std" (sample standard deviation) + "_sem" (standard error).
-_SAMPLED_METRIC_KEYS = {"skr", "qber", "throughputs", "rs",
+_SAMPLED_METRIC_KEYS = {"skr", "qber_total", "qber_est", "throughputs", "rs",
                         _VIS_COL[1], _CHSH_COL[1]}
 # Loss is deterministic for a given point and `latency` is measured once per
 # run (first key only), so neither carries an error bar.
+
+# Metrics with EXACTLY one sample per generated key. `chsh_S` is NOT here:
+# it is sampled once per TRAIN (many trains may feed one key), so counting
+# its samples used to inflate the published N_keys of E91 -- N_keys-E91
+# reported the number of CHSH samples (~300) instead of the number of keys
+# (25), and varied even with key_num = n_replicas = 1. The key count of a
+# point is now taken from this set only.
+_PER_KEY_METRIC_KEYS = {"skr", "qber_total", "qber_est", "throughputs",
+                        "rs", _VIS_COL[1]}
 
 #: Number of keys that actually entered the statistics of a point.
 _NKEYS_COL = ("N_keys", "n_keys")
@@ -260,7 +279,7 @@ _STAT_SUFFIXES = ("", "_std", "_sem")
 # of the CSV (historical case: sweep "visibility" [atmospheric] vs. metric
 # "visibility" [COW interferometer]).
 _RESERVED_RESULT_KEYS = (
-    {"protocol", "global_seed", "replica", "samples",
+    {"protocol", "global_seed", "replica", "samples", "qber",
      _NKEYS_COL[1], _NREPLICAS_COL[1]}
     | {k for _, k in _METRIC_COLS}
     | {_VIS_COL[1], _CHSH_COL[1]}
@@ -403,89 +422,93 @@ def _empty_metrics(protocol):
         dict: the same shape as :func:`_collect_metrics`, with empty sample
         lists so that the statistics collapse to NaN instead of failing.
     """
-    return dict(qber=list(protocol.error_rates), throughputs=0.0,
+    return dict(qber_total=list(protocol.error_rates), qber_est=[],
+                throughputs=0.0,
                 latency=protocol.latency, skr=0.0, rs=0.0,
                 skr_samples=[], rs_samples=[],
                 throughput_samples=list(protocol.throughputs))
 
 
-def _collect_metrics(protocol, f_ec=1.0):
-    """Per-key metrics of a finished run: QBER, throughput, latency, SKR, R_s.
+def _collect_metrics(stack, f_ec=1.0):
+    """Per-key metrics of a finished run, MEASURED on the whole stack.
 
-    The asymptotic secure fraction of Krzic Eq. (2.11) is applied to every
-    key separately, which is what makes the per-point mean and error bar
-    meaningful:
+    The secret key rate is no longer the asymptotic Kržič Eq. (2.11)
+    estimate: with the classical post-processing implemented (parameter
+    estimation -> error correction -> entropy estimation -> privacy
+    amplification -> authentication), R_sk is measured at the OUTPUT of
+    the authentication layer:
 
-        R_s  = sifted bits / qubits sent            (per key)
-        R_sk = R_s * [1 - f_EC*H2(E) - H2(E)]       (per key)
+        R_s  = sifted bits / qubits sent                       (per key)
+        R_sk = authenticated secret bits / qubits sent         (per key)
 
     The denominator (``send_bits_length``) is the number of qubits emitted
-    per train, so R_s and R_sk are in bits per qubit sent for BOTH protocol
-    families and are directly comparable.
+    per train, so R_s and R_sk stay in bits per qubit sent for BOTH
+    protocol families and remain directly comparable. Latency is now the
+    time to the FIRST AUTHENTICATED key; throughput keeps its historical
+    definition (sifted-key throughput of the sifting layer).
 
     Args:
-        protocol: protocol instance on Alice's side after ``Timeline.run``.
-        f_ec (float): error-correction inefficiency factor (1.0 = Shannon).
+        stack (list): Alice's ``protocol_stack`` (layer 0 = sifting; layer
+            4 = authentication when the post-processing stack is enabled).
+        f_ec (float): error-correction inefficiency (fallback path only).
 
     Returns:
-        dict: means (``qber``, ``throughputs``, ``latency``, ``skr``, ``rs``)
-        plus the per-key sample lists used for the error bars
-        (``skr_samples``, ``rs_samples``, ``throughput_samples``); ``qber``
-        is itself the per-key list.
+        dict: means (``qber_total``, ``qber_est``, ``throughputs``,
+        ``latency``, ``skr``, ``rs``) plus the per-key sample lists used
+        for the error bars; ``qber_total`` and ``qber_est`` are themselves
+        per-key lists.
     """
-    qber_list = protocol.error_rates
-    if not qber_list or protocol.send_bits_length == 0:
+    protocol = stack[0]
+    qber_total = list(protocol.error_rates)
+    if not qber_total or protocol.send_bits_length == 0:
         return _empty_metrics(protocol)
 
+    ec = stack[1] if len(stack) > 1 else None
+    auth = stack[4] if len(stack) > 4 else None
+
+    if auth is None or ec is None:
+        # Fallback (stack disabled): historical asymptotic estimate.
+        rs_list, skr_list = [], []
+        for i, e in enumerate(qber_total):
+            rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
+            skr_list.append(max(0.0, rs * (1 - f_ec * binary_entropy(e)
+                                           - binary_entropy(e))))
+            rs_list.append(rs)
+        return dict(qber_total=qber_total, qber_est=[],
+                    throughputs=_safe_mean(protocol.throughputs, 0.0),
+                    latency=protocol.latency,
+                    skr=float(np.mean(skr_list)), rs=float(np.mean(rs_list)),
+                    skr_samples=skr_list, rs_samples=rs_list,
+                    throughput_samples=list(protocol.throughputs))
+
+    # Post-processing path: align the per-key lists to the keys that made
+    # it through the WHOLE pipeline (keys still in flight when the
+    # timeline ends do not enter the statistics of any metric).
+    n_done = min(len(qber_total), len(auth.final_key_lengths),
+                 len(ec.qber_est_list))
+    qber_total = qber_total[:n_done]
+    qber_est = list(ec.qber_est_list[:n_done])
+
     rs_list, skr_list = [], []
-    for i, e in enumerate(qber_list):
+    for i in range(n_done):
         rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        skr_list.append(max(0.0, rs * (1 - f_ec * binary_entropy(e)
-                                       - binary_entropy(e))))
         rs_list.append(rs)
-    return dict(qber=qber_list, throughputs=_safe_mean(protocol.throughputs, 0.0),
-                latency=protocol.latency,
-                skr=float(np.mean(skr_list)), rs=float(np.mean(rs_list)),
-                skr_samples=skr_list, rs_samples=rs_list,
-                throughput_samples=list(protocol.throughputs))
+        # A key of `key_len` sifted bits (accumulated over possibly many
+        # trains) yields `final_key_lengths[i]` authenticated secret bits;
+        # per qubit sent, the secret fraction is the sifted fraction times
+        # the secret-per-sifted-bit ratio of the post-processing:
+        #     R_sk = R_s * l_net / (n + k).
+        key_len = ec.key_len_list[i] if i < len(ec.key_len_list) else 0
+        secret_per_sifted = (auth.final_key_lengths[i] / key_len
+                             if key_len else 0.0)
+        skr_list.append(rs * secret_per_sifted)
 
-
-def _collect_cow_metrics(protocol, visibility, ls_params, loss, f_ec=1.0):
-    """COW metrics with visibility-adjusted SKR (DOI 10.1063/1.2126792).
-
-    The COW security witness is the interference visibility V of the
-    monitoring line, so Eve's information is bounded by
-    ``r + (1 - V)*(1 + e^{-mu*t})/(2*e^{-mu*t})`` with ``r = mu*(1 - t)``
-    the fraction of pulses vulnerable to photon-number splitting and
-    ``t = 1 - loss`` the channel transmission.
-
-    Args:
-        protocol: COW protocol instance on Alice's side.
-        visibility (list[float]): per-key monitoring-line visibility.
-        ls_params (dict): light-source parameters (uses ``mean_photon_num``).
-        loss (float): end-to-end channel loss fraction in [0, 1].
-        f_ec (float): error-correction inefficiency factor.
-
-    Returns:
-        dict: same shape as :func:`_collect_metrics`.
-    """
-    qber_list = protocol.error_rates
-    if not qber_list or protocol.send_bits_length == 0:
-        return _empty_metrics(protocol)
-
-    mu = ls_params["mean_photon_num"]
-    t = 1 - loss
-    r = mu * (1 - t)
-    rs_list, skr_list = [], []
-    for i, e in enumerate(qber_list):
-        rs = protocol.sifted_bits_length[i] / protocol.send_bits_length
-        v = visibility[i]
-        eve_info = r + ((1 - v) * (1 + math.exp(-mu * t)) / (2 * math.exp(-mu * t)))
-        skr_list.append(max(0.0, rs * (1 - f_ec * binary_entropy(e) - eve_info)))
-        rs_list.append(rs)
-    return dict(qber=qber_list, throughputs=_safe_mean(protocol.throughputs, 0.0),
-                latency=protocol.latency,
-                skr=float(np.mean(skr_list)), rs=float(np.mean(rs_list)),
+    latency = auth.latency if auth.latency > 0 else protocol.latency
+    return dict(qber_total=qber_total, qber_est=qber_est,
+                throughputs=_safe_mean(protocol.throughputs, 0.0),
+                latency=latency,
+                skr=float(np.mean(skr_list)) if skr_list else 0.0,
+                rs=float(np.mean(rs_list)) if rs_list else 0.0,
                 skr_samples=skr_list, rs_samples=rs_list,
                 throughput_samples=list(protocol.throughputs))
 
@@ -691,6 +714,47 @@ def attenuation_loss(distance, attenuation):
     return 1.0 - 10.0 ** ((distance * attenuation) / -10.0)
 
 
+def _setup_postprocessing(alice, bob, *, f_ec, f_bits_reveal_qber,
+                          mode, cow_mu=None, channel_transmission=None,
+                          enforce_bell_violation=True):
+    """Pair and configure the classical post-processing stack of one run.
+
+    Single source of truth shared by the prepare-and-measure and the
+    entanglement runners: layers 1-4 of BOTH nodes are paired
+    (:func:`sequence.qkd.error_correction.pair_postprocessing_stacks`)
+    and receive the run parameters:
+
+    * error correction: ``f_bits_reveal_qber`` (parameter-estimation
+      sample fraction; project values 0.25 / 0.10) and ``f_ec``;
+    * entropy estimation: the protocol-specific Eve-information ``mode``
+      ("h2" for BB84/B92/BBM92, "cow" with the monitoring-line visibility
+      bound, "e91" with the CHSH abort) plus the COW context (mu, channel
+      transmission) when applicable.
+
+    Args:
+        alice / bob: the two nodes carrying ``protocol_stack``.
+        f_ec (float): error-correction inefficiency factor.
+        f_bits_reveal_qber (float): fraction of the sifted key revealed.
+        mode (str): entropy-estimation mode ("h2" | "cow" | "e91").
+        cow_mu (float | None): COW mean photon number.
+        channel_transmission (float | None): end-to-end transmission t.
+        enforce_bell_violation (bool): abort E91 keys with |S| <= 2.
+    """
+    pair_postprocessing_stacks(alice, bob)
+    for node in (alice, bob):
+        ec = node.protocol_stack[1]
+        ee = node.protocol_stack[2]
+        if ec is not None:
+            ec.f_bits_reveal_qber = f_bits_reveal_qber
+            ec.f_ec = f_ec
+        if ee is not None:
+            ee.f_ec = f_ec
+            ee.mode = mode
+            ee.cow_mu = cow_mu
+            ee.channel_transmission = channel_transmission
+            ee.enforce_bell_violation = enforce_bell_violation
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Unified simulation runner
 # ═══════════════════════════════════════════════════════════════════════
@@ -705,6 +769,7 @@ def run_qkd_simulation(
     charlie_position=0.5, distance_ac=None, distance_cb=None,
     f_ec=1.0, bell_state="psi_minus", seed=0,
     classical_delay_offset_ps=0.0, enforce_bell_violation=True,
+    postprocessing=True, f_bits_reveal_qber=0.25,
 ):
     """Run any QKD protocol registered in PROTOCOL_REGISTRY.
 
@@ -769,6 +834,8 @@ def run_qkd_simulation(
             f_ec=f_ec, bell_state=bell_state, seed=seed,
             classical_delay_offset_ps=classical_delay_offset_ps,
             enforce_bell_violation=enforce_bell_violation,
+            postprocessing=postprocessing,
+            f_bits_reveal_qber=f_bits_reveal_qber,
         )
 
     is_cow = cfg["qkdtype"] == 2
@@ -837,8 +904,11 @@ def run_qkd_simulation(
     cc0.delay += classical_delay_offset_ps
     cc1.delay += classical_delay_offset_ps
 
-    # Nodes.
-    node_kwargs = dict(stack_size=1, qkdtype=cfg["qkdtype"], source_type=src_type)
+    # Nodes. stack_size=5 builds the WHOLE post-processing stack (EC + EE +
+    # PA + authentication); stack_size=1 keeps only sifting (asymptotic
+    # fallback path of _collect_metrics).
+    node_kwargs = dict(stack_size=(5 if postprocessing else 1),
+                       qkdtype=cfg["qkdtype"], source_type=src_type)
     if cfg["encoding"] is not None:
         node_kwargs["encoding"] = cfg["encoding"]
 
@@ -862,6 +932,17 @@ def run_qkd_simulation(
     cc1.set_ends(bob, alice.name)
 
     cfg["pair_fn"](alice.protocol_stack[0], bob.protocol_stack[0])
+
+    # Reference link (loss=None): report the dB/m loss the channel applied.
+    effective_loss = loss if loss is not None else attenuation_loss(distance, attenuation)
+
+    if postprocessing:
+        _setup_postprocessing(
+            alice, bob, f_ec=f_ec, f_bits_reveal_qber=f_bits_reveal_qber,
+            mode=("cow" if cfg["needs_visibility"] else "h2"),
+            cow_mu=ls_params.get("mean_photon_num"),
+            channel_transmission=1.0 - effective_loss)
+
     tl.schedule(Event(0, Process(alice.protocol_stack[0],
                                  "push", [keysize, key_num, 6e12])))
 
@@ -872,16 +953,9 @@ def run_qkd_simulation(
                               seed=derive_seed(seed, "thermal_bob"))
     tl.run()
 
-    # Reference link (loss=None): report the dB/m loss the channel applied.
-    effective_loss = loss if loss is not None else attenuation_loss(distance, attenuation)
-
-    proto_obj = alice.protocol_stack[0]
+    res = _collect_metrics(alice.protocol_stack, f_ec)
     if cfg["needs_visibility"]:
-        vis = proto_obj.visibility
-        res = _collect_cow_metrics(proto_obj, vis, ls_params, effective_loss, f_ec)
-        res["visibility"] = vis
-    else:
-        res = _collect_metrics(proto_obj, f_ec)
+        res["visibility"] = alice.protocol_stack[0].visibility
     res["loss"] = effective_loss
     return res
 
@@ -906,7 +980,7 @@ def _unpack(res):
         tuple: (qber, throughputs, latency, skr, loss, rs[, visibility]
         [, chsh_S]).
     """
-    base = (res["qber"], res["throughputs"], res["latency"], res["skr"], res["loss"], res["rs"])
+    base = (res["qber_total"], res["throughputs"], res["latency"], res["skr"], res["loss"], res["rs"])
     if "visibility" in res:
         base += (res["visibility"],)
     if "chsh_S" in res:
@@ -967,6 +1041,7 @@ def _run_entanglement_qkd(
     eve_intercept_rate, eve_position,
     runtime, keysize, key_num, f_ec, bell_state, seed,
     classical_delay_offset_ps=0.0, enforce_bell_violation=True,
+    postprocessing=True, f_bits_reveal_qber=0.25,
 ):
     """Entanglement runner (see run_qkd_simulation Observations 3 and 4).
 
@@ -992,17 +1067,23 @@ def _run_entanglement_qkd(
     tl = Timeline(runtime * 1e9)
     tl.show_progress = False
 
-    # --- per-receiver noise probability (shared detector/thermal contracts) --
+    # --- per-receiver noise model (shared detector/thermal contracts) --------
+    # EQUIVALENT to the prepare-and-measure receiver, so the two families
+    # can be compared on the dark_count axis: the old lumped probability
+    #     1 - exp(-(eff*n_B + dark_count*gate))
+    # used the DETECTION GATE (~ns) for the dark counts, while BB84/B92/COW
+    # register a dark count anywhere inside the SLOT period 1/frequency
+    # (~125 ns) on that round's bit -- a two-orders-of-magnitude unit
+    # mismatch that made the dark_count sweep incomparable between the
+    # families. The per-detector model (dark_count/frequency per detector,
+    # eff*n_B/2 of background per detector, double clicks discarded) is now
+    # implemented inside MeasuringNode.apply_noise_counts, mirroring
+    # Detector.add_dark_count + ThermalNoiseSource + QKDNode.get_bits.
     det0 = detector_params[0]
-    gate = (thermal_params["detection_gate"] if thermal_params is not None
-            else detection_gate_from_detector(det0.get("time_resolution", 1000)))
     n_B = (_n_background_photons(ls_params, thermal_params)
            if thermal_params is not None else 0.0)
-    # n_B is a mean photon NUMBER per mode, not a click probability: apply
-    # the detector efficiency and the Poisson saturation 1 - exp(-mu).
     det_eff = det0.get("efficiency", 1.0)
-    mu_noise = det_eff * n_B + det0.get("dark_count", 0) * gate
-    noise_prob = 1.0 - math.exp(-mu_noise)
+    dark_count_rate = det0.get("dark_count", 0.0)
     pol_err = max(0.0, 1.0 - polarization_fidelity)
 
     # --- train length: the entanglement analog of the BB84 pulse train ------
@@ -1015,10 +1096,13 @@ def _run_entanglement_qkd(
     rounds_per_train = max(1, int(round(keysize / (mu or 1.0))))
 
     # --- measuring nodes (hardware + protocol at protocol_stack[0]) ----------
-    node_kwargs = dict(qkdtype=cfg["qkdtype"], stack_size=1,
-                       detector_efficiency=det0.get("efficiency", 1.0),
+    node_kwargs = dict(qkdtype=cfg["qkdtype"],
+                       stack_size=(5 if postprocessing else 1),
+                       detector_efficiency=det_eff,
                        polarization_error_prob=pol_err,
-                       noise_prob_per_round=noise_prob,
+                       dark_count_rate=dark_count_rate,
+                       background_mu=n_B,
+                       slot_frequency=frequency,
                        anti_correlated=anti)
     alice = MeasuringNode("Alice", tl, "alice", rounds_per_train,
                           seed=derive_seed(seed, "ent_alice"), **node_kwargs)
@@ -1096,6 +1180,19 @@ def _run_entanglement_qkd(
     # simulation-side handle used to size/launch the emission trains
     alice_proto.attach_source(charlie.source)
 
+    # --- classical post-processing stack (SAME setup as the P&M runner) ------
+    loss_ac_pre, loss_cb_pre = seg_loss(arm_ac), seg_loss(arm_cb)
+    if loss_ac_pre is None or loss_cb_pre is None:
+        loss_ac_pre = attenuation_loss(arm_ac, attenuation)
+        loss_cb_pre = attenuation_loss(arm_cb, attenuation)
+    loss_total_pre = 1.0 - (1.0 - loss_ac_pre) * (1.0 - loss_cb_pre)
+    if postprocessing:
+        _setup_postprocessing(
+            alice, bob, f_ec=f_ec, f_bits_reveal_qber=f_bits_reveal_qber,
+            mode=("e91" if cfg.get("needs_chsh") else "h2"),
+            channel_transmission=1.0 - loss_total_pre,
+            enforce_bell_violation=enforce_bell_violation)
+
     # --- schedule: SAME entry point as BB84/B92/COW --------------------------
     tl.init()
     tl.schedule(Event(0, Process(alice_proto, "push",
@@ -1106,8 +1203,8 @@ def _run_entanglement_qkd(
     # Identical function, identical denominator (send_bits_length = qubits
     # emitted per train) => R_sk and R_s are in bits per qubit sent for the
     # five protocols alike.
-    metrics = _collect_metrics(alice_proto, f_ec)
-    qber, skr = metrics["qber"], metrics["skr"]
+    metrics = _collect_metrics(alice.protocol_stack, f_ec)
+    qber, skr = metrics["qber_total"], metrics["skr"]
 
     mean_qber = _safe_mean(qber, default=0.0)
     secure_fraction = max(0.0, 1.0 - f_ec * binary_entropy(mean_qber)
@@ -1115,12 +1212,9 @@ def _run_entanglement_qkd(
 
     # Channel loss reported end to end (Alice--Bob through Charlie):
     #     L_total = 1 - (1 - L_ac) * (1 - L_cb)
-    # `seg_loss` returns None on the reference link (attenuation formula).
-    loss_ac, loss_cb = seg_loss(arm_ac), seg_loss(arm_cb)
-    if loss_ac is None or loss_cb is None:
-        loss_ac = attenuation_loss(arm_ac, attenuation)
-        loss_cb = attenuation_loss(arm_cb, attenuation)
-    loss_total = 1.0 - (1.0 - loss_ac) * (1.0 - loss_cb)
+    # (already computed before the run to configure the entropy layer).
+    loss_ac, loss_cb = loss_ac_pre, loss_cb_pre
+    loss_total = loss_total_pre
 
     result = dict(
         metrics,
@@ -1353,7 +1447,7 @@ def _sampled_keys_of(proto):
     Returns:
         list[str]: result-dict keys reduced by :func:`replicate_statistics`.
     """
-    keys = ["skr", "qber", "throughputs", "rs"]
+    keys = ["skr", "qber_total", "qber_est", "throughputs", "rs"]
     if PROTOCOL_REGISTRY[proto]["needs_visibility"]:
         keys.append(_VIS_COL[1])
     if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
@@ -1382,7 +1476,9 @@ def _worker(task):
     sweep_val = task["sweep_val"]
     res = run_qkd_simulation(proto, **task["kwargs"])
 
-    samples = {"skr": res.get("skr_samples"), "qber": res.get("qber"),
+    samples = {"skr": res.get("skr_samples"),
+               "qber_total": res.get("qber_total"),
+               "qber_est": res.get("qber_est"),
                "rs": res.get("rs_samples"),
                "throughputs": res.get("throughput_samples")}
 
@@ -1434,24 +1530,34 @@ def _aggregate_point(proto, records):
         out[key] = mean
         out[f"{key}_std"] = std
         out[f"{key}_sem"] = sem
-        # Every metric is measured on the same runs, so the largest count
-        # is the one describing the point (a metric can be all-NaN).
-        n_keys = max(n_keys, keys_used)
+        # N_keys must count KEYS, so only metrics sampled once per key
+        # enter the count. Per-TRAIN metrics (the E91 CHSH parameter) are
+        # excluded: counting their samples inflated N_keys-E91 to the
+        # number of trains (~300) instead of the number of keys, and made
+        # it vary even with key_num = n_replicas = 1.
+        if key in _PER_KEY_METRIC_KEYS:
+            n_keys = max(n_keys, keys_used)
         n_replicas = max(n_replicas, reps)
     out["n_keys"] = n_keys
     out["n_replicas"] = n_replicas
     return out
 
 
-def _protocol_columns(proto):
+def _protocol_columns(proto, include_stats=True):
     """(label, key) pairs of every CSV column produced for one protocol.
 
     Sampled metrics expand into three columns (mean, ``_std``, ``_sem``);
     deterministic ones keep a single column. The key count of the point is
     appended so that an error bar can always be traced back to its N.
 
+    With ``include_stats=False`` -- the single-sample campaign mode
+    ``key_num == 1 and n_replicas == 1``, where a dispersion is undefined
+    -- only the metric VALUE columns are emitted: no ``_std`` / ``_sem``
+    and no ``N_keys`` / ``N_replicas`` bookkeeping columns.
+
     Args:
         proto (str): registry key of the protocol.
+        include_stats (bool): whether to emit the statistics columns.
 
     Returns:
         list[tuple]: (column label, result-dict key) pairs, in CSV order.
@@ -1462,19 +1568,21 @@ def _protocol_columns(proto):
     if PROTOCOL_REGISTRY[proto].get("needs_chsh"):
         base.append(_CHSH_COL)
 
+    suffixes = _STAT_SUFFIXES if include_stats else ("",)
     cols = []
     for label, key in base:
         if key in _SAMPLED_METRIC_KEYS:
-            cols += [(f"{label}{s}", f"{key}{s}") for s in _STAT_SUFFIXES]
+            cols += [(f"{label}{s}", f"{key}{s}") for s in suffixes]
         else:
             cols.append((label, key))
-    cols.append(_NKEYS_COL)
-    cols.append(_NREPLICAS_COL)
+    if include_stats:
+        cols.append(_NKEYS_COL)
+        cols.append(_NREPLICAS_COL)
     return cols
 
 
 def _collect_results(sweep_var, sweep_values, results_list, protocols,
-                     global_seed=None):
+                     global_seed=None, include_stats=True):
     """Reorganise raw per-task results into wide-format columns.
 
     Args:
@@ -1501,14 +1609,14 @@ def _collect_results(sweep_var, sweep_values, results_list, protocols,
     if global_seed is not None:
         metrics["global_seed"] = np.full(len(sweep_values), global_seed)
     for proto in protocols:
-        for label, key in _protocol_columns(proto):
+        for label, key in _protocol_columns(proto, include_stats):
             metrics[f"{label}-{proto}"] = np.array(
                 [data[proto].get(v, {}).get(key, np.nan) for v in sweep_values])
     return metrics
 
 
 def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers,
-               global_seed=None):
+               global_seed=None, include_stats=True):
     """Run the task list in parallel and save the wide-format metrics CSV.
 
     Args:
@@ -1575,7 +1683,8 @@ def _run_tasks(tasks, label, sweep_values, protocols, output_csv, max_workers,
     print()
 
     metrics = _collect_results(label, sweep_values, results, protocols,
-                               global_seed=global_seed)
+                               global_seed=global_seed,
+                               include_stats=include_stats)
     os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
     pd.DataFrame(metrics).to_csv(output_csv, index=False)
     print(f"[parallel] Saved {output_csv}")
@@ -1723,6 +1832,7 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
             "interferometer_phase_error",
             "phase_noise_coefficient",
             "f_ec",
+            "f_bits_reveal_qber",
             # entanglement-only kwargs of run_qkd_simulation (BBM92/E91).
             # NOTE: there is no "num_rounds" knob any more -- the emission
             # rounds are derived from `keysize` (sweep "keysize" instead).
@@ -1800,8 +1910,12 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
         protocols=protocols, global_seed=global_seed,
         n_replicas=n_replicas, extra_kwargs=extra_kwargs,
     )
+    # Single-sample campaign mode: with one key of one replica there is no
+    # dispersion to report, so the CSV carries only the metric values.
+    include_stats = not (int(key_num) == 1 and int(n_replicas) == 1)
     return _run_tasks(tasks, sweep_var, sweep_values, protocols,
-                      output_csv, max_workers, global_seed=global_seed)
+                      output_csv, max_workers, global_seed=global_seed,
+                      include_stats=include_stats)
 
 
 def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
@@ -1869,8 +1983,10 @@ def sim_scenario(label, scenario_points, *, runtime, channel_parameters,
         protocols=protocols, global_seed=global_seed,
         n_replicas=n_replicas, extra_kwargs=extra_kwargs,
     )
+    include_stats = not (int(key_num) == 1 and int(n_replicas) == 1)
     return _run_tasks(tasks, label, scenario_points, protocols,
-                      output_csv, max_workers, global_seed=global_seed)
+                      output_csv, max_workers, global_seed=global_seed,
+                      include_stats=include_stats)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2134,7 +2250,8 @@ def run_reference_link_simulation(global_seed=None):
     # Same post-processing offset and source placement as the realistic
     # campaign, so only the channel model differs between the two.
     common["extra_kwargs"] = {"f_ec": 1.0, "charlie_position": 0.1,
-                              "classical_delay_offset_ps": 1e9}
+                              "classical_delay_offset_ps": 1e9,
+                              "f_bits_reveal_qber": 0.25}
     common["global_seed"] = global_seed
 
     print(f"[campaign] attenuation-only reference link -> "
@@ -2176,7 +2293,10 @@ def run_simulation(global_seed=None, run_reference_link=True):
     # configuration used by Krzic rather than the symmetric README case.
     common["extra_kwargs"] = {**(common["extra_kwargs"] or {}), "f_ec": 1.0,
                               "charlie_position": 0.1,
-                              "classical_delay_offset_ps": 1e9}
+                              "classical_delay_offset_ps": 1e9,
+                              # parameter-estimation sample fraction (25%;
+                              # the alternative project value is 0.10)
+                              "f_bits_reveal_qber": 0.25}
     site_altitude = env["site"]["site_altitude"]
     print(f"[campaign] realistic free-space aerial link -> "
           f"{DEFAULT_DATA_DIR}/  (global_seed={global_seed})")
@@ -2204,6 +2324,12 @@ def run_simulation(global_seed=None, run_reference_link=True):
     sim_variable("f_ec",
                  [1.0,1.05,1.10,1.11,1.12,1.13,1.14,1.15,1.16,1.17,1.18,1.20,1.22],
                  **common)
+
+    # Parameter-estimation reveal fraction (project values 0.10 and 0.25):
+    # quantifies the trade-off between estimator accuracy (QBER_est vs
+    # QBER_total) and the bits sacrificed before error correction.
+    sim_variable("f_bits_reveal_qber", [0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
+                 keysize=10000, **common)
 
     sim_variable("eve_intercept_rate", [0.1, 0.3, 0.5, 0.7, 0.9], keysize=10_000, protocols=["BB84+Eve", "B92+Eve", "COW+Eve", "BBM92+Eve", "E91+Eve"], **common)
                  

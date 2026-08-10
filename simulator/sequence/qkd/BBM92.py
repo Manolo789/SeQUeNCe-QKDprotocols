@@ -96,49 +96,29 @@ class BBM92(BaseEntanglementQKD):
     ANGLES_ALICE = [0.0, 45.0]
     ANGLES_BOB = [0.0, 45.0]
 
-    #: fraction (1/N) of the sifted key publicly revealed for the QBER.
-    SAMPLE_DIVISOR = 4
-
-    # ----- Bob: sifting + QBER sample ---------------------------------------
+    # ----- Bob: sifting -----------------------------------------------------
+    # Parameter estimation (QBER sample reveal + discard) was MOVED to the
+    # shared post-processing stack (sequence.qkd.error_correction), so that
+    # BOTH protocol families estimate and discard the SAME fraction of the
+    # sifted key. The old per-train sample here made BBM92 lose 25% of its
+    # sifted bits BEFORE key accumulation while BB84/B92/COW lost none,
+    # biasing every R_s / R_sk comparison between the families -- and it
+    # would have DOUBLE-discarded once the stack ran its own estimation.
     def _bob_sift(self, common: list, alice_settings: dict):
         # keep rounds where both sides used the SAME basis
         sift_rounds = [i for i in common
                        if alice_settings[i] == self.owner.records[i][0]]
-
-        # public sample to estimate the QBER (reveals part of the bits)
-        rng = self.owner.get_generator()
-        n_sample = max(1, len(sift_rounds) // self.SAMPLE_DIVISOR)
-        sample = sorted(rng.choice(
-            sift_rounds, size=min(n_sample, len(sift_rounds)),
-            replace=False).tolist()) if sift_rounds else []
-        sample_bits = [self._bit(i) for i in sample]
-
-        # discard the publicly revealed sample from the key (Kržič Fig. 2.5)
-        sample_set = set(sample)
-        key_rounds = [i for i in sift_rounds if i not in sample_set]
-        self.key_rounds = key_rounds
+        self.key_rounds = sift_rounds
         # bits of THIS train; the keysize-oriented driver in the base class
         # accumulates them into `key_bits` until a full key is available.
-        self.train_key_bits = [self._bit(i) for i in key_rounds]
+        self.train_key_bits = [self._bit(i) for i in sift_rounds]
         self.metrics = {"sifted_len": len(sift_rounds)}
 
         reply = EntQKDMessage(EntQKDMsgType.SIFT_ANNOUNCE, self.peer_proto,
-                              key_rounds=key_rounds,
-                              sifted_len=len(sift_rounds),
-                              sample=sample, sample_bits=sample_bits)
+                              key_rounds=sift_rounds,
+                              sifted_len=len(sift_rounds))
         self.owner.send_message(self.peer_node, reply)
 
-    # ----- Alice: QBER metric (key already adopted by the base class) --------
+    # ----- Alice: per-train metric (key already adopted by the base class) ---
     def _alice_finish(self, msg: EntQKDMessage):
-        sample = msg.kwargs["sample"]
-        sample_bits_bob = msg.kwargs["sample_bits"]
-        errors = sum(1 for i, b in zip(sample, sample_bits_bob)
-                     if self._bit(i) != b)
-        qber = errors / len(sample) if sample else 0.0
-        self.metrics = {"sifted_len": msg.kwargs["sifted_len"],
-                        "sample_len": len(sample), "qber": qber}
-        # Per-train diagnostic. The QBER that feeds the SHARED key-rate
-        # estimator is the error rate of the extracted key (computed by the
-        # base class, exactly as BB84/B92/COW do), so both protocol families
-        # are post-processed by the same code with the same denominator.
-        self.sampled_qbers.append(qber)
+        self.metrics = {"sifted_len": msg.kwargs["sifted_len"]}

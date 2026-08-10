@@ -445,9 +445,9 @@ class B92(StackProtocol):
                         log.logger.info(self.name + " generated a valid key")
                         self.sifted_bits_length.append(len(indices))
                         self.set_key()  # convert from binary list to int
-                        self._pop(info=self.key)
+                        self._pop(info=self.key, length=self.key_lengths[0])
                         self.another.set_key()
-                        self.another._pop(info=self.another.key)  # TODO: why access another node?
+                        self.another._pop(info=self.another.key, length=self.key_lengths[0])
 
                         # for metrics
                         if self.latency == 0:
@@ -470,6 +470,12 @@ class B92(StackProtocol):
                 if self.keys_left_list[0] < 1:
                     self.working = False
                     self.another.working = False
+                    # Without a post-processing stack there is nothing left
+                    # to deliver: stop the timeline so detector noise chains
+                    # (dark counts, sky background) do not keep replaying
+                    # until the full horizon (see the dark_count sweep OOM).
+                    if not self.upper_protocols:
+                        self.owner.timeline.stop()
 
     def set_key(self):
         """Method to convert `bit_list` field (list[int]) to a single key (int)."""

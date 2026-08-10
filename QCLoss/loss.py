@@ -754,8 +754,13 @@ def make_atmospheric_phase_process(distance, timeline_stop_time_ps, ls_params,
     tau_atm = L0 / (2.0 * math.pi * V_perp)
     dt_s = float(loss_parameters.get(
         "phase_dt_s", max(min(0.02 * tau_atm, 1.0e-3), 1.0e-6)))
+    # Guard margin: interferometer path-difference offsets can query up to
+    # a few sampling steps past the timeline horizon; without the margin
+    # the last events of long runs hit the clamp (the RuntimeWarning of
+    # the 2026-08-08 keysize sweep) instead of the interpolated value.
+    duration_s = timeline_stop_time_ps * 1e-12 + 4.0 * dt_s
     return AtmosphericPhaseProcess(
-        duration_s=timeline_stop_time_ps * 1e-12, dt_s=dt_s,
+        duration_s=duration_s, dt_s=dt_s,
         wavelength=ls_params["wavelength"], C_n2=loss_parameters["C_n2"],
         distance=distance, outer_scale_m=L0,
         wind_speed_perp=V_perp, seed=seed)
