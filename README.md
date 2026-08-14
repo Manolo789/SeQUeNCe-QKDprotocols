@@ -77,4 +77,9 @@ python3 QKD_Extension.py
 ## Contact
 If you have questions, please contact Emanuel at [em7411081@gmail.com](mailto:em7411081@gmail.com).
 
+## Papers that Used and/or Extended `SeQUeNCe-QKDprotocols`
+| Year | Authors | Title | Venue | Code |
+|------|---------|-------|-------|------|
+| 2026 |  CABRERA, Emanuel M. et al | [Protocolos de Comunicação Quântica: Estudo de Caso Prévio para Implementação de Enlace Experimental.](https://doi.org/10.5753/wqunets.2026.23453) | III WQuNets (SBRC 2026) | [GitHub](https://github.com/Manolo789/SeQUeNCe-QKDprotocols/releases/tag/v0.1) |
+
 
