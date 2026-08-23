@@ -66,13 +66,17 @@ from sequence.utils.encoding_cow import time_bin_cow
 import sequence.utils.log as log
 
 from QCLoss.loss import (
-    f_velocity, outer_scale, inner_scale, viscosity_sutherland,
+    f_velocity, outer_scale, inner_scale,
     channel_FSO_loss, cn2_horizontal_link, wind_speed_perp,
     make_atmospheric_phase_process)
 from QCLoss.sky_radiance import (
     b_sky_at, n_background, detection_gate_from_detector)
 
-from scenarios import diurnal_profile
+from scenarios import diurnal_profile, local_hour_to_utc
+
+#: Version of the simulation code, recorded in ``simulator_metrics.csv``
+#: so every CSV can be traced back to the parameter set that produced it.
+__version__ = "v0.875.1"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1795,7 +1799,13 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
     cn2_reference_hour = site.get("cn2_reference_hour", 12.0)
     cn2_sunrise = site.get("sunrise", 6.0)
     cn2_sunset = site.get("sunset", 18.0)
-    cn2_relative_humidity = site.get("relative_humidity", 47.0)
+    cn2_relative_humidity = site.get("relative_humidity", 68.87)
+    # Date/zone/coordinates of the reference instant, needed to recompute
+    # B_sky on the sweeps that change the station pressure.
+    site_latitude  = site.get("latitude")
+    site_longitude = site.get("longitude")
+    site_date      = site.get("date")
+    site_local_tz  = site.get("local_tz")
 
 
     def point_to_spec(val):
@@ -1893,6 +1903,18 @@ def sim_variable(sweep_var, sweep_values, *, runtime, channel_parameters,
                 sunrise=cn2_sunrise, sunset=cn2_sunset,
                 temperature=lp["temperature"], wind_speed=ground_wind,
                 relative_humidity=cn2_relative_humidity)
+            # B_sky depends on the station pressure through the Rayleigh
+            # optical depth, so the "pressure" sweep must recompute it as
+            # well; otherwise the sky background stays frozen at the value
+            # of the base scenario while the loss model already moved.
+            if (sweep_var == "pressure" and tp is not None
+                    and None not in (site_latitude, site_longitude,
+                                     site_date, site_local_tz)):
+                tp["B_sky"] = b_sky_at(
+                    local_hour_to_utc(site_date, cn2_reference_hour,
+                                      site_local_tz),
+                    site_latitude, site_longitude,
+                    ls_params["wavelength"], pressure=val)
         elif sweep_var == "wind_speed_perp":
             # Acts only on the COW atmospheric phase process, so 9 of the 10
             # protocols stay flat; prefer the "ground_wind_speed" sweep.
@@ -2049,24 +2071,40 @@ def default_environment():
     detector_params     = [dict(det_template) for _ in range(2)]
     detector_params_cow = [dict(det_template) for _ in range(3)]
 
-    # -- Atmospheric / site parameters (base values; per-hour overrides
-    #    come from diurnal_profile() in scenarios.py)
-    temperature   = 298.15            # K
+    # -- Reference instant of the base scenario. EVERY time-dependent
+    #    quantity (C_n2, B_sky and the diurnal sweep) is derived from the
+    #    three constants below, so they can never drift apart again: the
+    #    previous code mixed hour=12.0 LOCAL for C_n2 with a hard-coded
+    #    15:00 UTC for B_sky, which under the zone actually used by
+    #    build_diurnal_profile_fn were two different instants.
+    site_date      = "2015-03-11"                  # measurement day
+    local_tz       = timezone(timedelta(hours=-3))  # America/Sao_Paulo, no DST
+    reference_hour = 22.0                          # local fractional hour
+    reference_utc  = local_hour_to_utc(site_date, reference_hour, local_tz)
+    # Sunrise/sunset of 2015-03-11 at the site, LOCAL time (UTC-3),
+    # twilight type -0.833 deg: 06:06:52 and 18:26:52.
+    sunrise = 6.11444444444
+    sunset  = 18.4477777778
+
+    # -- Atmospheric / site parameters. Base values = the record of
+    #    'sensores/estação-solar-usp_Tabela01.dat' at 2015-03-11 12:00,
+    #    i.e. exactly the point the diurnal sweep reproduces at hour=12.
+    temperature   = 298.83            # K    (25.68ºC)
     pressure      = 92700.0           # Pa   (927 mbar)
-    wind_speed    = 3.2               # m/s  (320 cm/s)
+    wind_speed    = 3.564             # m/s  (356.4 cm/s)
+    relative_humidity = 68.87         # %    (UmidRel)
     height_link   = 8.0               # m ACIMA DO SOLO (800 cm)
     site_altitude = 720.0             # m ASL - only for wind_speed_perp (jet)
-    latitude      = math.radians(-23.5615)   # LARC/EPUSP
-    longitude     = math.radians(-46.7311)
-    sunrise = 6.7833
-    sunset  = 19.8833         # Sunset/sunrise on Feb 04, 2015 (twilight type -0.833 deg)
+    latitude      = math.radians(-23.5576613)   # LARC/EPUSP
+    longitude     = math.radians(-46.7306847)
 
     friction_velocity = f_velocity(wind_speed, T_classification=7, height_ag=height_link)      # m/s
-    viscosity = viscosity_sutherland(temperature)
 
-    cn = cn2_horizontal_link(height_link, hour=12.0, sunrise=sunrise,
-                             sunset=sunset, temperature=temperature,
-                             wind_speed=wind_speed, relative_humidity=47.0)
+    cn = cn2_horizontal_link(height_link, hour=reference_hour,
+                             sunrise=sunrise, sunset=sunset,
+                             temperature=temperature,
+                             wind_speed=wind_speed,
+                             relative_humidity=relative_humidity)
 
     # -- (distance_m, attenuation_dB/m, polarization_fidelity)
     channel_parameters = (700, 0.0002, 1)
@@ -2094,7 +2132,10 @@ def default_environment():
         "detection_gate":   detection_gate_from_detector(time_resolution), # s
         "fov_solid_angle":  2*math.pi*(1 - math.cos(math.atan(diameter_sensor/(2*focal_distance)))), # sr
         "receiver_radius":  loss_parameters["receiver_radius"],   # m
-        "B_sky":            b_sky_at(datetime(2015, 2, 4, 15, 0, tzinfo=timezone.utc), latitude, longitude, ls_params["wavelength"], pressure=pressure), # **
+        # Same instant as C_n2 above (reference_utc), theoretical model. **
+        # The EMPIRICAL B_sky (diffuse radiation of the station) is used
+        # only by the hour sweep, see build_diurnal_profile_fn.
+        "B_sky":            b_sky_at(reference_utc, latitude, longitude, ls_params["wavelength"], pressure=pressure), # **
     }
     # **First approximation adopted of 'PIRANDOLA, S. Limits and security of free-space quantum 
     #   communications. Physical Review Research, v. 3, n. 1, 25 mar. 2021'
@@ -2127,7 +2168,10 @@ def default_environment():
                 wind_speed=wind_speed, height_link=height_link,
                 site_altitude=site_altitude, latitude=latitude,
                 longitude=longitude, sunrise=sunrise, sunset=sunset,
-                relative_humidity=47.0, cn2_reference_hour=12.0)
+                relative_humidity=relative_humidity,
+                cn2_reference_hour=reference_hour,
+                date=site_date, local_tz=local_tz,
+                reference_utc=reference_utc)
     # `site` is also consumed by sim_variable to RECOMPUTE u* and C_n2 when
     # T / P / height / wind are swept (see point_to_spec).
     common["site"] = site
@@ -2191,16 +2235,40 @@ def reference_link_environment():
                 extra_kwargs=None, common=common)
 
 
-def build_diurnal_profile_fn(env):
-    """Diurnal profile bound to the site of `env` (used by both drivers)."""
+#: Station table feeding the hour sweep, resolved next to this file so the
+#: campaign no longer depends on the current working directory.
+STATION_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "sensores", "estação-solar-usp_Tabela01.dat")
+
+
+def build_diurnal_profile_fn(env, b_sky_source="measured",
+                             spectral_width=None):
+    """Diurnal profile bound to the site of `env` (used by both drivers).
+
+    The date and the time zone come from ``env["site"]``, so the hour sweep
+    and the base scenario always describe the SAME day and the same zone.
+
+    Args:
+        env (dict): environment built by :func:`default_environment`.
+        b_sky_source (str): "measured" (default) takes B_sky from the
+            diffuse radiation of the station table; "model" keeps the
+            theoretical clear-sky chain. Only this sweep (label="hour")
+            uses measured data; every other campaign keeps the model.
+        spectral_width (float | None): Delta_lambda [m] of the empirical
+            B_sky; None uses the receiver ``filter_bandwidth``.
+
+    Returns:
+        callable: materialiser consumed by :func:`sim_scenario`.
+    """
     site = env["site"]
-    df = pd.read_csv("sensores/estação-solar-usp_Tabela01.dat", sep=',', skiprows=4, header=None, decimal='.', low_memory=False)
+    df = pd.read_csv(STATION_TABLE, sep=',', skiprows=4, header=None, decimal='.', low_memory=False)
     df[0] = pd.to_datetime(df[0], format="%Y-%m-%d %H:%M:%S")
     return partial(diurnal_profile, sunrise=site["sunrise"], sunset=site["sunset"],
                    site_altitude=site["site_altitude"], latitude=site["latitude"],
                    longitude=site["longitude"],
-                   local_tz=timezone(timedelta(hours=-2)), date="2015-02-04",
-                   dataframe=df)
+                   local_tz=site["local_tz"], date=site["date"],
+                   dataframe=df, b_sky_source=b_sky_source,
+                   spectral_width=spectral_width)
 
 
 def save_simulator_metrics(path, elapsed_s, global_seed, key_num,
@@ -2275,7 +2343,7 @@ def run_reference_link_simulation(global_seed=None):
 
     print(f"[campaign] attenuation-only reference link -> "
           f"{REFERENCE_LINK_DATA_DIR}/")
-    sim_variable("distance", range(1000, 100001, 1000),
+    sim_variable("distance", range(1000, 100001, 10000),
                  keysize=10000, **common)
     sim_variable("keysize",
                  [20, 45, 50, 100, 200, 400, 800, 1600,
@@ -2411,7 +2479,11 @@ def run_simulation(global_seed=None, run_reference_link=True):
         key_num=KEY_NUM_FOR_STATISTICS,
         n_replicas=N_REPLICAS_FOR_STATISTICS,
         campaigns=campaigns,
-        extra={"reference_link_dir": REFERENCE_LINK_DATA_DIR},
+        extra={"reference_link_dir": REFERENCE_LINK_DATA_DIR,
+               "code_version": __version__,
+               "scenario_date": env["site"]["date"],
+               "scenario_reference_utc":
+                   env["site"]["reference_utc"].isoformat(timespec="seconds")},
     )
     return global_seed
 

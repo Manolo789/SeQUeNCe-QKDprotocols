@@ -108,7 +108,7 @@ X_LABELS = {
     "C_n2":                       "Cₙ² — parâmetro de estrutura do índice de refração [m⁻²ᐟ³]",
     "temperature":                "Temperatura [K]",
     "pressure":                   "Pressão [Pa]",
-    "wind_speed_perp":            "Velocidade do vento perpendicular [m/s]",
+    "ground_wind_speed":          "Velocidade do vento na superfície [m/s]",
     "height_ag":                  "Altura acima do solo [m]",
     "receiver_radius":            "Raio do receptor [m]",
     "filter_bandwidth":           "Largura de banda do filtro [m]",
@@ -118,6 +118,7 @@ X_LABELS = {
     "eve_intercept_rate":         "Taxa de interceptação da Eve",
     "eve_position":               "Posição da Eve (fração da distância)",
     "hour":                       "Hora do dia [h]",
+    "f_bits_reveal_qber":         "Porcentagem de Bits Revelados para cálculo da QBER",
     # entanglement-based sweeps (BBM92 / E91)
     "f_ec":                       "Eficiência da correção de erros (f_EC)",
     "charlie_position":           "Posição de Charlie (fração da distância Alice–Bob)",
@@ -159,6 +160,7 @@ BASE_PARAMS = {
     "receiver_radius":            "Raio receptor=0,103 m",
     "temperature":                "Temperatura=298,15 K",
     "wind_speed_perp":            "Vento perp.=4,34 m/s",
+    "f_bits_reveal_qber":         "f_bits_reveal_qber=25%",
     # entanglement-based operating point (BBM92 / E91), mirroring
     # run_simulation()/run_entanglement_simulation() in QKD_Extension.py.
     "f_ec":                       "f_EC=1,1",
@@ -185,7 +187,8 @@ SWEEP_SHORT = {
     "pressure":                   "Pressão",
     "receiver_radius":            "Raio receptor",
     "temperature":                "Temperatura",
-    "wind_speed_perp":            "Vento perp.",
+    "ground_wind_speed":          "Vento na superfície [m/s]",
+    "f_bits_reveal_qber":         "% de Bits Revelados para QBER",
     "f_ec":                       "f_EC",
     "charlie_position":           "Posição Charlie",
 }
@@ -966,7 +969,8 @@ SWEEPS = [
     "pressure",
     "receiver_radius",
     "temperature",
-    "wind_speed_perp",
+    "ground_wind_speed",
+    "f_bits_reveal_qber",
     # entanglement-only sweeps (BBM92 / E91); absent CSVs are skipped silently.
     "f_ec",
     "charlie_position",

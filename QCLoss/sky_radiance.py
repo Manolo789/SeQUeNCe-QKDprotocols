@@ -299,6 +299,113 @@ def b_sky_at(when_utc: datetime, latitude: float, longitude: float,
     h = solar_elevation(when_utc, latitude, longitude)
     return b_sky(wavelength, h, **kwargs)
 
+# ---------------------------------------------------------------------------
+# 3b. Empirical B_sky from the radiometers of the station
+# ---------------------------------------------------------------------------
+#: Nominal spectral passband of a thermopile pyranometer (CMP/LI-200 class,
+#: 0.3-2.8 um). It is NOT the default divisor of
+#: :func:`b_sky_from_diffuse` -- see the ``spectral_width`` argument.
+PYRANOMETER_SPECTRAL_WIDTH = 2.5e-6      # m
+
+
+def _as_float(value):
+    """Coerce a datalogger field to float, or None when it is not usable.
+
+    Campbell TOA5 files write missing samples as the STRING ``"NAN"``, so a
+    column that contains one is read by pandas as ``object`` and the plain
+    ``float(...)`` of the caller would either raise or silently produce a
+    ``nan`` that propagates to B_sky.
+
+    Args:
+        value: raw cell (float, int, str or None).
+
+    Returns:
+        float | None: the numeric value, or None when missing/not numeric.
+    """
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(out) else out
+
+
+def b_sky_from_diffuse(diffuse_irradiance, filter_bandwidth, *,
+                       spectral_width=None, global_irradiance=None,
+                       irradiance=None, b_night=B_NIGHT_FULL_MOON):
+    """B_sky [W·m^-2·m^-1·sr^-1] from the MEASURED diffuse irradiance.
+
+    Empirical counterpart of :func:`b_sky`: instead of the SPCTRAL2
+    clear-sky chain it uses the diffuse horizontal irradiance recorded by
+    the station (``RadDifuso_Avg``), with the same isotropic-sky assumption
+    L = E_dif/pi (Liou 2002):
+
+        B_sky = E_dif / (pi * Delta_lambda)
+
+    ATTENTION (documented limitation): ``E_dif`` is a BROADBAND quantity
+    (0.3-2.8 um for a thermopile pyranometer) and the division above
+    redistributes ALL of that power inside ``Delta_lambda``. With the
+    project default (``spectral_width=None`` -> the 1 nm optical filter of
+    the receiver) the resulting spectral radiance is therefore an UPPER
+    BOUND, ~3 orders of magnitude above the clear-sky model at the same
+    instant. Passing ``spectral_width=PYRANOMETER_SPECTRAL_WIDTH`` divides
+    by the passband the sensor actually integrates and brings the result
+    back to the order of magnitude of :func:`b_sky`. A spectroradiometer,
+    or a pyranometer plus a spectral shape, is what would remove the
+    ambiguity for good.
+
+    Args:
+        diffuse_irradiance: diffuse horizontal irradiance E_dif [W·m^-2]
+            (``RadDifuso_Avg``).
+        filter_bandwidth: receiver optical bandwidth [m]; used as
+            ``Delta_lambda`` when ``spectral_width`` is None.
+        spectral_width: explicit ``Delta_lambda`` [m] overriding
+            ``filter_bandwidth`` (e.g. PYRANOMETER_SPECTRAL_WIDTH).
+        global_irradiance: global horizontal irradiance [W·m^-2]
+            (``RadGlobal_Avg``); consistency check only (E_dif <= E_glob).
+        irradiance: reading of the ``Irradiancia_Avg`` channel [W·m^-2];
+            diagnostic only, never part of the formula.
+        b_night: floor applied to the result [SI]; the pyranometer cannot
+            resolve the night sky and reads 0 after sunset.
+
+    Returns:
+        float: B_sky [W·m^-2·m^-1·sr^-1].
+
+    Raises:
+        ValueError: if ``Delta_lambda`` is not positive or if the diffuse
+            reading is missing/negative, so the caller can fall back to the
+            theoretical model.
+    """
+    width = filter_bandwidth if spectral_width is None else spectral_width
+    if not width or width <= 0:
+        raise ValueError("b_sky_from_diffuse: Delta_lambda must be > 0 "
+                         f"(got {width!r}).")
+
+    e_dif = _as_float(diffuse_irradiance)
+    if e_dif is None:
+        raise ValueError("b_sky_from_diffuse: diffuse irradiance is missing "
+                         "(NAN) in the measurement record.")
+    if e_dif < 0.0:
+        raise ValueError("b_sky_from_diffuse: negative diffuse irradiance "
+                         f"({e_dif:.3g} W/m^2); sensor offset or bad record.")
+
+    e_glob = _as_float(global_irradiance)
+    if e_glob is not None and e_glob >= 0.0 and e_dif > 1.05 * e_glob:
+        warnings.warn(
+            f"b_sky_from_diffuse: diffuse ({e_dif:.4g} W/m^2) above global "
+            f"({e_glob:.4g} W/m^2); the record is inconsistent and B_sky is "
+            "likely overestimated.", RuntimeWarning)
+
+    e_irr = _as_float(irradiance)
+    if e_irr is not None and e_irr < 0.0:
+        warnings.warn(
+            f"b_sky_from_diffuse: 'Irradiancia' channel negative "
+            f"({e_irr:.4g} W/m^2); sensor offset, reading ignored (it is a "
+            "diagnostic only and never enters the formula).", RuntimeWarning)
+
+    return max(e_dif / (math.pi * width), b_night)
+
 
 # ---------------------------------------------------------------------------
 # 4. Background photons per detection mode
