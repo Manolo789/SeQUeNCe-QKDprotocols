@@ -1,0 +1,84 @@
+$ python3 QKD_Extension.py
+[campaign] realistic free-space aerial link -> data/  (global_seed=20260805)
+[parallel] Launching 1000 tasks across 8 workers (20 distances x 10 protocols x 5 replicas)
+[parallel] 1000/1000 done (100.0%), elapsed 10904ss
+[parallel] Saved data/metrics_variable-distance.csv
+[parallel] Launching 650 tasks across 8 workers (13 keysizes x 10 protocols x 5 replicas)
+[parallel] 650/650 done (100.0%), elapsed 10770s2s
+[parallel] Saved data/metrics_variable-keysize.csv
+[parallel] Launching 180 tasks across 8 workers (9 charlie_positions x 4 protocols x 5 replicas)
+[parallel] 180/180 done (100.0%), elapsed 2465s0s
+[parallel] Saved data/metrics_variable-charlie_position.csv
+[parallel] Launching 650 tasks across 8 workers (13 f_ecs x 10 protocols x 5 replicas)
+[parallel] 650/650 done (100.0%), elapsed 4767s6s
+[parallel] Saved data/metrics_variable-f_ec.csv
+[parallel] Launching 300 tasks across 8 workers (6 f_bits_reveal_qbers x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 2212s8s
+[parallel] Saved data/metrics_variable-f_bits_reveal_qber.csv
+[parallel] Launching 125 tasks across 8 workers (5 eve_intercept_rates x 5 protocols x 5 replicas)
+[parallel] 125/125 done (100.0%), elapsed 1002ss
+[parallel] Saved data/metrics_variable-eve_intercept_rate.csv
+[parallel] Launching 500 tasks across 8 workers (10 efficiencys x 10 protocols x 5 replicas)
+[parallel] 500/500 done (100.0%), elapsed 7865s3s
+[parallel] Saved data/metrics_variable-efficiency.csv
+[parallel] Launching 350 tasks across 8 workers (7 dark_counts x 10 protocols x 5 replicas)
+[parallel] 350/350 done (100.0%), elapsed 6996s1s
+[parallel] Saved data/metrics_variable-dark_count.csv
+[parallel] Launching 350 tasks across 8 workers (7 frequencys x 10 protocols x 5 replicas)
+[parallel] 350/350 done (100.0%), elapsed 3096s0s
+[parallel] Saved data/metrics_variable-frequency.csv
+[parallel] Launching 450 tasks across 8 workers (9 atm_visibilitys x 10 protocols x 5 replicas)
+[parallel] 450/450 done (100.0%), elapsed 8193s6s
+[parallel] Saved data/metrics_variable-atm_visibility.csv
+[parallel] Launching 300 tasks across 8 workers (6 C_n2s x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 2214s0s
+[parallel] Saved data/metrics_variable-C_n2.csv
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=273.0 K, U=3.6 m/s, RH=69 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:289: RuntimeWarning: cn2_surface_sadot_kopeika: the regression returned a non-physical value (<=0); falling back to 1e-17 m^(-2/3). Check the input units/domain.
+  warnings.warn("cn2_surface_sadot_kopeika: the regression returned a "
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=313.0 K, U=3.6 m/s, RH=69 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+[parallel] Launching 300 tasks across 8 workers (6 temperatures x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 2216s2s
+[parallel] Saved data/metrics_variable-temperature.csv
+[parallel] Launching 300 tasks across 8 workers (6 pressures x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 2220s4s
+[parallel] Saved data/metrics_variable-pressure.csv
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=298.8 K, U=15.0 m/s, RH=69 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:289: RuntimeWarning: cn2_surface_sadot_kopeika: the regression returned a non-physical value (<=0); falling back to 1e-17 m^(-2/3). Check the input units/domain.
+  warnings.warn("cn2_surface_sadot_kopeika: the regression returned a "
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=298.8 K, U=20.0 m/s, RH=69 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+[parallel] Launching 300 tasks across 8 workers (6 ground_wind_speeds x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 2217s4s
+[parallel] Saved data/metrics_variable-ground_wind_speed.csv
+[parallel] Launching 300 tasks across 8 workers (6 height_ags x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 2217s2s
+[parallel] Saved data/metrics_variable-height_ag.csv
+[parallel] Launching 250 tasks across 8 workers (5 receiver_radiuss x 10 protocols x 5 replicas)
+[parallel] 250/250 done (100.0%), elapsed 3011s0s
+[parallel] Saved data/metrics_variable-receiver_radius.csv
+[parallel] Launching 350 tasks across 8 workers (7 filter_bandwidths x 10 protocols x 5 replicas)
+[parallel] 350/350 done (100.0%), elapsed 2711s3s
+[parallel] Saved data/metrics_variable-filter_bandwidth.csv
+[parallel] Launching 250 tasks across 8 workers (5 fov_solid_angles x 10 protocols x 5 replicas)
+[parallel] 250/250 done (100.0%), elapsed 1876s0s
+[parallel] Saved data/metrics_variable-fov_solid_angle.csv
+[parallel] Launching 300 tasks across 8 workers (6 precipitation_rates x 10 protocols x 5 replicas)
+[parallel] 300/300 done (100.0%), elapsed 4722s6s
+[parallel] Saved data/metrics_variable-precipitation_rate.csv
+[parallel] Launching 140 tasks across 8 workers (14 interferometer_phase_errors x 2 protocols x 5 replicas)
+[parallel] 140/140 done (100.0%), elapsed 531s
+[parallel] Saved data/metrics_variable-interferometer_phase_error.csv
+[parallel] Launching 225 tasks across 8 workers (9 eve_positions x 5 protocols x 5 replicas)
+[parallel] 225/225 done (100.0%), elapsed 1840s0s
+[parallel] Saved data/metrics_variable-eve_position.csv
+Traceback (most recent call last):
+  File "/.../SeQUeNCe-QKDprotocols/QKD_Extension.py", line 2492, in <module>
+    run_simulation()
+  File "/.../SeQUeNCe-QKDprotocols/QKD_Extension.py", line 2481, in run_simulation
+    campaigns=campaigns,
+              ^^^^^^^^^
+NameError: name 'campaigns' is not defined
