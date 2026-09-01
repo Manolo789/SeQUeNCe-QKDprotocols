@@ -1,0 +1,58 @@
+$ python3 QKD_Extension.py
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:289: RuntimeWarning: cn2_surface_sadot_kopeika: the regression returned a non-physical value (<=0); falling back to 1e-17 m^(-2/3). Check the input units/domain.
+  warnings.warn("cn2_surface_sadot_kopeika: the regression returned a "
+[campaign] realistic free-space aerial link -> data/  (global_seed=20260805)
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:289: RuntimeWarning: cn2_surface_sadot_kopeika: the regression returned a non-physical value (<=0); falling back to 1e-17 m^(-2/3). Check the input units/domain.
+  warnings.warn("cn2_surface_sadot_kopeika: the regression returned a "
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=294.5 K, U=2.3 m/s, RH=94 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=293.4 K, U=2.2 m/s, RH=93 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/loss.py:277: RuntimeWarning: cn2_surface_sadot_kopeika: (T=293.4 K, U=1.2 m/s, RH=93 %) outside the validity domain of the [Ben04] regression; the result is an extrapolation.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 08:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-196.3 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-354.8 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-477.8 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-909 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-1820 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-2113 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 15:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-1726 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-2240 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 17:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-1994 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 18:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-729.6 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 19:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-464.2 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 20:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-566.9 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 21:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/QCLoss/sky_radiance.py:402: RuntimeWarning: b_sky_from_diffuse: 'Irradiancia' channel negative (-175.6 W/m^2); sensor offset, reading ignored (it is a diagnostic only and never enters the formula).
+  warnings.warn(
+/.../SeQUeNCe-QKDprotocols/scenarios.py:124: RuntimeWarning: diurnal_profile: record 2015-03-11 23:00 flagged with Erro=8 by the datalogger; the sample is used as is.
+  warnings.warn(
+[parallel] Launching 1200 tasks across 8 workers (24 hours x 10 protocols x 5 replicas)
+[parallel] 1200/1200 done (100.0%), elapsed 9718s5s
+[parallel] Saved data/metrics_scenario-hour.csv
+[seed] global_seed=20260805 recorded in data/simulator_metrics.csv
