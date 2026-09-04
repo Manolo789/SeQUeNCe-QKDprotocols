@@ -1,0 +1,3 @@
+This sweep (hourly variation) was generated alongside the simulation in the '11-03-2015_22h00' folder; consequently, the metrics and settings in the simulator_metrics.csv file within that folder also apply to 'metrics_scenario-hour.csv'.
+
+Furthermore, since this sweep does not have a fixed time—unlike the other sweeps—copies of it exist in both '11-03-2015_12h00' and '11-03-2015_22h00' for analysis purposes within the 'plot.py' script.

@@ -1014,6 +1014,166 @@ def plot_tornado_grid_compact(sweep_dfs, protocol, suffix, title, filename):
     _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
     return True
 
+# Mapeamento de cores sólidas para identificação dos protocolos
+PROTOCOL_COLORS = {
+    "BB84":  "#1f77b4",  # Azul
+    "B92":   "#ff7f0e",  # Laranja
+    "COW":   "#2ca02c",  # Verde
+    "BBM92": "#d62728",  # Vermelho
+    "E91":   "#9467bd",  # Roxo
+}
+
+def plot_tornado_all(sweep_dfs, suffix, title, filename):
+    """Gera uma matriz unificada de micro-barras rankeadas para TODOS os protocolos.
+
+    - Eixo X (Macro): Parâmetros de varredura (sweeps) ordenados da esquerda 
+      (maior impacto global) para a direita (menor impacto global).
+    - Eixo Y: Métricas de desempenho.
+    - Cada célula (Métrica × Sweep):
+      - Micro-barras verticais representando a variação de cada protocolo.
+      - As barras dentro da célula são rankeadas internamente da esquerda para a
+        direita em ordem decrescente de impacto (maior variação no extremo esquerdo da célula).
+      - Linhas horizontais de referência de alto contraste em 0.1, 0.25, 0.5, 0.75 e 0.9.
+    """
+    # 1. Identifica protocolos, métricas e varreduras válidas no dataset
+    protocols = [
+        p for p in PROTOCOLS
+        if any(f"{m}-{p}{suffix}" in df.columns for df in sweep_dfs.values() for m in METRIC_ORDER)
+    ]
+    if not protocols:
+        return False
+
+    metrics = [
+        m for m in METRIC_ORDER
+        if any(f"{m}-{p}{suffix}" in df.columns for df in sweep_dfs.values() for p in protocols)
+    ]
+    if not metrics:
+        return False
+
+    sweeps = [
+        s for s in SWEEPS if s in sweep_dfs and
+        any(f"{m}-{p}{suffix}" in sweep_dfs[s].columns for m in metrics for p in protocols)
+    ]
+    if not sweeps:
+        return False
+
+    n_protocols = len(protocols)
+    n_metrics = len(metrics)
+    n_sweeps = len(sweeps)
+
+    # 2. Calcula as amplitudes brutas (máx − mín) por protocolo, métrica e sweep
+    raw_amps = np.zeros((n_protocols, n_metrics, n_sweeps))
+    for p_idx, p in enumerate(protocols):
+        for m_idx, m in enumerate(metrics):
+            _, _, scale = METRIC_INFO[m]
+            for s_idx, s in enumerate(sweeps):
+                y = _series(sweep_dfs[s], m, p, suffix)
+                if y is not None:
+                    raw_amps[p_idx, m_idx, s_idx] = _amplitude(y * scale)
+
+    # 3. Normalização relativa por métrica (coluna escalada de 0 a 1)
+    rel_amps = np.zeros_like(raw_amps)
+    for m_idx in range(n_metrics):
+        max_m = raw_amps[:, m_idx, :].max()
+        if max_m > 0:
+            rel_amps[:, m_idx, :] = raw_amps[:, m_idx, :] / max_m
+
+    # 4. Ordenação Macro (Eixo X): Sweeps por impacto global médio (Maior -> Esquerda)
+    sweep_impact = rel_amps.mean(axis=(0, 1))
+    sweep_sort_idx = np.argsort(sweep_impact)[::-1]
+
+    sweeps_sorted = [sweeps[i] for i in sweep_sort_idx]
+    rel_amps_sorted = rel_amps[:, :, sweep_sort_idx]
+
+    # 5. Configuração da Figura
+    fig_width = max(14, n_sweeps * 0.95)
+    fig_height = max(7, n_metrics * 1.25)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+    # Desenhando limites de células e linhas de referência em alto contraste
+    ref_levels = [0.1, 0.25, 0.5, 0.75, 0.9]
+
+    for m_idx in range(n_metrics):
+        # Linha limite entre células de métricas
+        ax.axhline(m_idx - 0.5, color='black', linestyle='-', alpha=0.6, linewidth=1.1)
+
+        # Linhas horizontais de referência de amplitude de alto contraste
+        for lvl in ref_levels:
+            y_ref = (m_idx - 0.4) + lvl * 0.8
+            ax.axhline(y_ref, color='#444444', linestyle=':', alpha=0.65, linewidth=0.85, zorder=1)
+
+    for s_idx in range(n_sweeps + 1):
+        ax.axvline(s_idx - 0.5, color='black', linestyle='-', alpha=0.6, linewidth=1.1)
+
+    # Largura e posições relativas das barras
+    bar_width = 0.75 / n_protocols
+    bar_positions = np.linspace(-0.35 + bar_width / 2, 0.35 - bar_width / 2, n_protocols)
+
+    # 6. Plotagem das barras rankeadas dentro de cada célula
+    for m_idx in range(n_metrics):
+        for s_idx in range(n_sweeps):
+            cell_vals = rel_amps_sorted[:, m_idx, s_idx]
+
+            # Ordenação Micro: Rankeia os protocolos (Maior variação -> Esquerda da célula)
+            sorted_proto_indices = np.argsort(cell_vals)[::-1]
+
+            for pos_idx in range(n_protocols):
+                p_idx = sorted_proto_indices[pos_idx]
+                p_name = protocols[p_idx]
+                val = cell_vals[p_idx]
+
+                x_pos = s_idx + bar_positions[pos_idx]
+                y_bottom = m_idx - 0.4
+                y_height = val * 0.8  # Escala para a altura útil da célula
+
+                ax.bar(
+                    x_pos,
+                    y_height,
+                    bottom=y_bottom,
+                    width=bar_width,
+                    color=PROTOCOL_COLORS.get(p_name, "#333333"),
+                    edgecolor="black",
+                    linewidth=0.4,
+                    alpha=0.9,
+                    zorder=3,
+                )
+
+    # 7. Formatação de eixos e títulos
+    ax.set_xticks(np.arange(n_sweeps))
+    ax.set_xticklabels([_short_sweep(s) for s in sweeps_sorted], rotation=45, ha='right', fontsize=10, fontweight='bold')
+    ax.set_yticks(np.arange(n_metrics))
+    ax.set_yticklabels([METRIC_INFO[m][0] for m in metrics], fontsize=11, fontweight='bold')
+
+    ax.set_xlim(-0.5, n_sweeps - 0.5)
+    ax.set_ylim(-0.5, n_metrics - 0.5)
+
+    ax.set_title(title, fontsize=13, fontweight='bold', pad=15)
+    ax.set_xlabel("Parâmetros de Varredura (Ordenados da Esquerda [Maior Impacto Global] para Direita [Menor Impacto])", fontsize=10, fontweight='bold', labelpad=10)
+    ax.set_ylabel("Métricas de Desempenho", fontsize=11, fontweight='bold', labelpad=10)
+
+    # Sombra alternada entre as linhas
+    for m_idx in range(0, n_metrics, 2):
+        ax.axhspan(m_idx - 0.5, m_idx + 0.5, color='gray', alpha=0.03, zorder=0)
+
+    # Legenda exclusiva para os Protocolos
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=PROTOCOL_COLORS.get(p, "#333333"), ec='black', lw=0.5)
+        for p in protocols
+    ]
+    ax.legend(
+        handles,
+        protocols,
+        title="Protocolos",
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        frameon=True,
+        fancybox=True,
+        shadow=True,
+    )
+
+    plt.tight_layout()
+    _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
+    return True
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Heatmap: sweeps × metrics sensitivity (option C)
@@ -1205,12 +1365,19 @@ def main():
             if plot_tornado_grid_compact(sweep_dfs, proto, suffix, title=titleB, 
                                 filename=f"tornado_compacto_{proto}_{tag}"):
                 print(f"[ok] B.2) tornado compacto: {proto} ({tag})")
-            
+                
             # C) heatmap
             titleC = head + " · Sensibilidade normalizada (por métrica)"
             if plot_sensitivity_heatmap(sweep_dfs, proto, suffix, title=titleC,
                                         filename=f"heatmap_{proto}_{tag}"):
                 print(f"[ok] C) heatmap: {proto} ({tag})")
+                
+    for suffix, (tag, scen_label) in scenarios.items():
+        # D) Tornado Matriz Unificado (Micro-barras Rankeadas para todos os protocolos)
+        title_tornado_all = f"Sensibilidade por Protocolo — {scen_label}"
+        if plot_tornado_all(sweep_dfs, suffix, title=title_tornado_all,
+                             filename=f"tornado_all_{tag}"):
+            print(f"[ok] D) tornado matriz todos protocolos: ({tag})")
             
 
 if __name__ == "__main__":
