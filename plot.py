@@ -41,7 +41,7 @@ def _save_and_close(fig, path):
 # Directory holding the metrics CSVs.  The realistic free-space campaign
 # writes to "data" and the attenuation-only reference campaign to
 # "data/reference_link"; point PLOT_DATA_DIR at the latter to plot it.
-DATA_DIR = os.environ.get("PLOT_DATA_DIR", "data")
+DATA_DIR = os.environ.get("PLOT_DATA_DIR", "data/11-03-2015_reference_link")
 
 # Draw error bars (mean +- 1 standard error) whenever the simulator exported
 # the "<metric>_sem-<protocol>" columns.  Set PLOT_ERRORBARS=std to show the
@@ -206,7 +206,7 @@ METRIC_INFO = {
     "QBER_est":    ("QBER estimada",   "%",              100.0),
     "R_s":         ("R_s",             "%",              100.0),
     "Throughputs": ("Throughput",      "bits/s",         1.0),
-    "Throughput_final": ("Throughput final (chave secreta)", "bits/s", 1.0),
+    "Throughput_final": ("Throughput final", "bits/s", 1.0),
     "Latency":     ("Latência",        "s",              1.0),
     "Loss":        ("Perda do canal",  "fração",         1.0),
     "Visibility":  ("Visibilidade",    "",               1.0),
