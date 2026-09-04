@@ -1100,7 +1100,7 @@ def plot_tornado_all(sweep_dfs, suffix, title, filename):
         # Linhas horizontais de referência de amplitude de alto contraste
         for lvl in ref_levels:
             y_ref = (m_idx - 0.4) + lvl * 0.8
-            ax.axhline(y_ref, color='#444444', linestyle=':', alpha=0.65, linewidth=0.85, zorder=1)
+            ax.axhline(y_ref, color='black', linestyle=':', alpha=0.65, linewidth=0.85, zorder=1)
 
     for s_idx in range(n_sweeps + 1):
         ax.axvline(s_idx - 0.5, color='black', linestyle='-', alpha=0.6, linewidth=1.1)
@@ -1140,16 +1140,16 @@ def plot_tornado_all(sweep_dfs, suffix, title, filename):
 
     # 7. Formatação de eixos e títulos
     ax.set_xticks(np.arange(n_sweeps))
-    ax.set_xticklabels([_short_sweep(s) for s in sweeps_sorted], rotation=45, ha='right', fontsize=10, fontweight='bold')
+    ax.set_xticklabels([_short_sweep(s) for s in sweeps_sorted], rotation=45, ha='right', fontsize=15, fontweight='bold')
     ax.set_yticks(np.arange(n_metrics))
-    ax.set_yticklabels([METRIC_INFO[m][0] for m in metrics], fontsize=11, fontweight='bold')
+    ax.set_yticklabels([METRIC_INFO[m][0] for m in metrics], rotation=45, ha='right', fontsize=16, fontweight='bold')
 
     ax.set_xlim(-0.5, n_sweeps - 0.5)
     ax.set_ylim(-0.5, n_metrics - 0.5)
 
-    ax.set_title(title, fontsize=13, fontweight='bold', pad=15)
-    ax.set_xlabel("Parâmetros de Varredura (Ordenados da Esquerda [Maior Impacto Global] para Direita [Menor Impacto])", fontsize=10, fontweight='bold', labelpad=10)
-    ax.set_ylabel("Métricas de Desempenho", fontsize=11, fontweight='bold', labelpad=10)
+    ax.set_title(title, fontsize=20, fontweight='bold', pad=15)
+    ax.set_xlabel("Parâmetros de Varredura (Ordenados da Esquerda [Maior Impacto Global] para Direita [Menor Impacto])", fontsize=20, fontweight='bold', labelpad=10)
+    ax.set_ylabel("Métricas de Desempenho", fontsize=20, fontweight='bold', labelpad=10)
 
     # Sombra alternada entre as linhas
     for m_idx in range(0, n_metrics, 2):
@@ -1322,7 +1322,7 @@ def main():
         #plot_sweep(df, filename=stem, title=title)
         plot_sweep(df, filename=stem)
         print(f"[ok] {sweep}  ({os.path.basename(path)})")
-    
+
     # Special side-by-side comparison: distance vs. key size (if both exist).
     if "distance" in dfs and "keysize" in dfs:
         df_d, df_k = dfs["distance"], dfs["keysize"]
@@ -1336,7 +1336,7 @@ def main():
                         filename="eve_scenario",
                         subtitle_left=subtitle_d, subtitle_right=subtitle_k)
         print("[ok] comparação dupla distance × keysize")
-    
+
     # Comparison figures per (protocol, scenario):
     #   A) parallel-coordinates grid (top-N highlighted, others faded)
     #   B) tornado (sensitivity ranking)
