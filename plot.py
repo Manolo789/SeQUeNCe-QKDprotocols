@@ -882,6 +882,137 @@ def plot_tornado_grid(sweep_dfs, protocol, suffix, title, filename, ncols=3):
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
     return True
+    
+# ═══════════════════════════════════════════════════════════════════════
+#  Tornado Unificado: Sensibilidade de todas as métricas em único gráfico
+# ═══════════════════════════════════════════════════════════════════════
+def plot_tornado_grid_compact(sweep_dfs, protocol, suffix, title, filename):
+    """Gera um ÚNICO gráfico tornado agrupado.
+
+    - Eixo Y: Parâmetros variados (sweeps), ordenados pelo impacto médio total.
+    - Conjunto de barras por parâmetro: Ordenados internamente para que a
+      métrica de maior amplitude fique no topo e a de menor fique embaixo.
+    - Eixo X: Amplitude (máx - mín) normalizada [0 a 1] por métrica.
+    """
+    # 1. Filtra métricas e varreduras válidas presentes nos dados
+    metrics = [
+        m
+        for m in METRIC_ORDER
+        if any(
+            f"{m}-{protocol}{suffix}" in df.columns for df in sweep_dfs.values()
+        )
+    ]
+    if not metrics:
+        return False
+
+    sweeps = [
+        s
+        for s, df in sweep_dfs.items()
+        if any(f"{m}-{protocol}{suffix}" in df.columns for m in metrics)
+    ]
+    if not sweeps:
+        return False
+
+    n_sweeps = len(sweeps)
+    n_metrics = len(metrics)
+
+    # 2. Matriz de Amplitudes Brutas (linhas = sweeps, colunas = métricas)
+    raw_amps = np.zeros((n_sweeps, n_metrics))
+    for j, m in enumerate(metrics):
+        _, _, scale = METRIC_INFO[m]
+        for i, s in enumerate(sweeps):
+            y = _series(sweep_dfs[s], m, protocol, suffix)
+            if y is not None:
+                raw_amps[i, j] = _amplitude(y * scale)
+
+    # 3. Normalização por métrica (coluna) para escala [0, 1]
+    norm_amps = np.zeros_like(raw_amps)
+    for j in range(n_metrics):
+        col_max = raw_amps[:, j].max()
+        if col_max > 0:
+            norm_amps[:, j] = raw_amps[:, j] / col_max
+
+    # 4. Ordenação dos sweeps pelo impacto médio total (maior no topo do eixo Y)
+    mean_impact = norm_amps.mean(axis=1)
+    sort_idx = np.argsort(
+        mean_impact
+    )  # Cautela: argsort crescente coloca o maior valor no topo (maior Y)
+
+    sweeps_sorted = [sweeps[i] for i in sort_idx]
+    norm_amps_sorted = norm_amps[sort_idx, :]
+
+    # 5. Construção da Figura
+    fig_height = max(7, n_sweeps * 0.45)
+    fig, ax = plt.subplots(figsize=(11, fig_height))
+
+    y_positions = np.arange(n_sweeps)
+    total_group_height = 0.75
+    bar_height = total_group_height / n_metrics
+
+    # Paleta de cores fixa por métrica
+    cmap = plt.get_cmap("tab10")
+    metric_colors = [cmap(i % 10) for i in range(n_metrics)]
+
+    # Handles explícitos para a legenda (uma cor/rótulo por métrica)
+    legend_handles = [
+        plt.Rectangle(
+            (0, 0),
+            1,
+            1,
+            color=metric_colors[j],
+            ec="black",
+            lw=0.5,
+            label=METRIC_INFO[m][0],
+        )
+        for j, m in enumerate(metrics)
+    ]
+
+    # 6. Plotagem: Em CADA parâmetro (i), ordena da MENOR para a MAIOR amplitude
+    for i in range(n_sweeps):
+        amps_i = norm_amps_sorted[i, :]
+        # argsort crescente: rank 0 = menor amplitude, rank (n_metrics-1) = maior amplitude
+        ranked_indices = np.argsort(amps_i)
+
+        for k, j in enumerate(ranked_indices):
+            # k=0 (menor) -> offset negativo (base do grupo)
+            # k=n_metrics-1 (maior) -> offset positivo (topo do grupo)
+            offset = (k - (n_metrics - 1) / 2.0) * bar_height
+
+            ax.barh(
+                y_positions[i] + offset,
+                norm_amps_sorted[i, j],
+                height=bar_height,
+                color=metric_colors[j],
+                edgecolor="black",
+                linewidth=0.5,
+                alpha=0.9,
+            )
+
+    # 7. Ajustes visuais do gráfico
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels([_short_sweep(s) for s in sweeps_sorted], fontsize=10)
+    ax.set_xlabel(
+        "Amplitude (máx − mín) [normalizada por métrica]", fontsize=11
+    )
+    ax.set_title(title, fontsize=12, pad=15)
+    ax.set_xlim(0, 1.05)
+    ax.grid(True, axis="x", linestyle="--", alpha=0.5)
+
+    # Legenda externa
+    ax.legend(
+        handles=legend_handles,
+        title="Métricas",
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left",
+        fontsize=10,
+        title_fontsize=11,
+        fancybox=True,
+        shadow=True,
+    )
+
+    plt.tight_layout()
+    _save_and_close(fig, f"{DATA_DIR}/{filename}.png")
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1012,7 +1143,7 @@ def main():
     # a parameter here: channel loss is computed dynamically by loss.py.
     distance = 700     # m
     keysize = 10000    # bits
-
+    
     # Plot the metrics as a function of each sweep, one figure set per sweep,
     # in the order defined by SWEEPS.
     dfs = {}          # keyed by the actual variable name (first CSV column)
@@ -1031,7 +1162,7 @@ def main():
         #plot_sweep(df, filename=stem, title=title)
         plot_sweep(df, filename=stem)
         print(f"[ok] {sweep}  ({os.path.basename(path)})")
-
+    
     # Special side-by-side comparison: distance vs. key size (if both exist).
     if "distance" in dfs and "keysize" in dfs:
         df_d, df_k = dfs["distance"], dfs["keysize"]
@@ -1045,7 +1176,7 @@ def main():
                         filename="eve_scenario",
                         subtitle_left=subtitle_d, subtitle_right=subtitle_k)
         print("[ok] comparação dupla distance × keysize")
-
+    
     # Comparison figures per (protocol, scenario):
     #   A) parallel-coordinates grid (top-N highlighted, others faded)
     #   B) tornado (sensitivity ranking)
@@ -1056,26 +1187,31 @@ def main():
     for proto in PROTOCOLS:
         for suffix, (tag, scen_label) in scenarios.items():
             head = f"{proto} — {scen_label}"
-
+            
             # A) parallel-coordinates grid
             titleA = head + "\nMétricas × sweeps  (eixo X normalizado por sweep)"
             if plot_parallel_grid(sweep_dfs, proto, suffix, title=titleA,
                                   filename=f"parallel_{proto}_{tag}",
                                   highlight_top=highlight_top):
                 print(f"[ok] A) grade de sweeps: {proto} ({tag})")
-
-            # B) tornado
+            
+            # B.1) tornado
             titleB = head + "\nTornado: sensibilidade de cada métrica a cada sweep"
             if plot_tornado_grid(sweep_dfs, proto, suffix, title=titleB,
                                  filename=f"tornado_{proto}_{tag}"):
-                print(f"[ok] B) tornado: {proto} ({tag})")
-
+                print(f"[ok] B.1) tornado: {proto} ({tag})")
+            
+            # B.2) tornado compacto
+            if plot_tornado_grid_compact(sweep_dfs, proto, suffix, title=titleB, 
+                                filename=f"tornado_compacto_{proto}_{tag}"):
+                print(f"[ok] B.2) tornado compacto: {proto} ({tag})")
+            
             # C) heatmap
             titleC = head + " · Sensibilidade normalizada (por métrica)"
             if plot_sensitivity_heatmap(sweep_dfs, proto, suffix, title=titleC,
                                         filename=f"heatmap_{proto}_{tag}"):
                 print(f"[ok] C) heatmap: {proto} ({tag})")
-
+            
 
 if __name__ == "__main__":
     main()
