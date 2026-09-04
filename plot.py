@@ -41,7 +41,7 @@ def _save_and_close(fig, path):
 # Directory holding the metrics CSVs.  The realistic free-space campaign
 # writes to "data" and the attenuation-only reference campaign to
 # "data/reference_link"; point PLOT_DATA_DIR at the latter to plot it.
-DATA_DIR = os.environ.get("PLOT_DATA_DIR", "data/11-03-2015_reference_link")
+DATA_DIR = os.environ.get("PLOT_DATA_DIR", "data")
 
 # Draw error bars (mean +- 1 standard error) whenever the simulator exported
 # the "<metric>_sem-<protocol>" columns.  Set PLOT_ERRORBARS=std to show the
